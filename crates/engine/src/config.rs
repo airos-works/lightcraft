@@ -8,7 +8,8 @@
 //!    `%APPDATA%`. If that folder can't be written (read-only medium, Program Files), a warning is logged
 //!    and the platform folder is used.
 //! 3. The platform convention: macOS `~/Library/Application Support/LightCraft`, Windows
-//!    `%APPDATA%\LightCraft`, Linux `$XDG_CONFIG_HOME/lightcraft` or `~/.config/lightcraft`.
+//!    `%APPDATA%\LightCraft`, Linux `$XDG_CONFIG_HOME/lightcraft` or `~/.config/lightcraft`, Haiku
+//!    `~/config/settings/LightCraft`.
 //!
 //! Hosts that have a file system (the desktop app, the CLI, the MCP server) share these defaults so a model
 //! installed from one is there for the others. Nothing here is applied automatically: a [`Session`] has no
@@ -30,6 +31,7 @@ pub const PORTABLE_DATA_DIR: &str = "LightCraftData";
 enum Platform {
     Mac,
     Windows,
+    Haiku,
     Other,
 }
 
@@ -41,6 +43,8 @@ pub fn config_dir() -> Option<PathBuf> {
         Platform::Mac
     } else if cfg!(windows) {
         Platform::Windows
+    } else if cfg!(target_os = "haiku") {
+        Platform::Haiku
     } else {
         Platform::Other
     };
@@ -58,6 +62,7 @@ fn config_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>, p
     match platform {
         Platform::Mac => env("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/LightCraft")),
         Platform::Windows => env("APPDATA").map(|a| PathBuf::from(a).join("LightCraft")),
+        Platform::Haiku => env("HOME").map(|h| PathBuf::from(h).join("config/settings/LightCraft")),
         Platform::Other => {
             env("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("lightcraft"))
         }
@@ -211,7 +216,7 @@ mod config_tests {
 
     #[test]
     fn config_override_wins_without_reading_user_profile() {
-        for platform in [Platform::Mac, Platform::Windows, Platform::Other] {
+        for platform in [Platform::Mac, Platform::Windows, Platform::Haiku, Platform::Other] {
             let actual = config_dir_with(
                 platform,
                 |name| {
@@ -226,7 +231,7 @@ mod config_tests {
 
     #[test]
     fn config_empty_override_disables_profile_without_reading_defaults() {
-        for platform in [Platform::Mac, Platform::Windows, Platform::Other] {
+        for platform in [Platform::Mac, Platform::Windows, Platform::Haiku, Platform::Other] {
             assert_eq!(
                 config_dir_with(
                     platform,
@@ -246,9 +251,10 @@ mod config_tests {
         let vars = [("HOME", "/user"), ("APPDATA", "/roaming"), ("XDG_CONFIG_HOME", "/xdg")];
         assert_eq!(resolve(Platform::Mac, &vars), Some(PathBuf::from("/user/Library/Application Support/LightCraft")));
         assert_eq!(resolve(Platform::Windows, &vars), Some(PathBuf::from("/roaming/LightCraft")));
+        assert_eq!(resolve(Platform::Haiku, &vars), Some(PathBuf::from("/user/config/settings/LightCraft")));
         assert_eq!(resolve(Platform::Other, &vars), Some(PathBuf::from("/xdg/lightcraft")));
         assert_eq!(resolve(Platform::Other, &[("HOME", "/user")]), Some(PathBuf::from("/user/.config/lightcraft")));
-        for platform in [Platform::Mac, Platform::Windows, Platform::Other] {
+        for platform in [Platform::Mac, Platform::Windows, Platform::Haiku, Platform::Other] {
             assert_eq!(resolve(platform, &[]), None);
         }
     }

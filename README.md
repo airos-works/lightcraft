@@ -1,14 +1,7 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
+<h1 align="center">LightCraft for air/OS</h1>
 
+This independent fork ports [LightCraft by the ArtCraft team](https://github.com/storytold/lightcraft) to air/OS (Haiku), with a native Be API host and Vulkan acceleration. See [build and validation notes](docs/haiku.md). The upstream project does not maintain this port.
 
-<h1 align="center">LightCraft</h1>
 
 <h3 align="center">Your photos. Your pixels. Your machine.</h3>
 
@@ -18,12 +11,12 @@
 </p>
 
 <p align="center">
-  <b>Photo library and raw development; an open-source, non-destructive photo library and raw developer, built in pure Rust.</b><br>
-  Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
+  <b>Photo library and raw development; an open-source, non-destructive photo library and raw developer, built in Rust with a native Be API host for air/OS.</b><br>
+  Native on air/OS (Haiku), macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
 
 <p align="center">
-  <img alt="Pure Rust" src="https://img.shields.io/badge/pure-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-f2a516?style=flat-square&logo=rust&logoColor=white">
   <img alt="macOS, Windows, Linux and Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-8a5800?style=flat-square">
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
@@ -646,7 +639,6 @@ part of this repository and LightCraft, under [`docs/brand/LICENSE-brand.txt`](d
 Forks and modified versions must remove them.
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>
 
@@ -655,3 +647,5 @@ Forks and modified versions must remove them.
 [![Star History Chart](https://api.star-history.com/svg?repos=storytold/lightcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Flightcraft&type=date&legend=top-left)
 
 Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. Drag a panel header to a target edge or another header. Its context menu offers Float panel, Move to group, and Close panel. Existing panel toggles reopen panels at their saved location; Reset Panel Layout restores the app layout. Floating panels remain inside the current app window.
+
+The upstream ArtCraft marks are omitted from this modified distribution under their [license](docs/brand/LICENSE-brand.txt).

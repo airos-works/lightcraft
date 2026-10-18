@@ -31,7 +31,7 @@ pub fn check(app: &str) -> Result<(), String> {
 /// Open `path` in `app` (see [`check`]). Spawned, never waited for: the editor runs alongside.
 pub fn open_with(path: &str, app: &str) -> Result<(), String> {
     let mut c = match launcher(app)? {
-        Launcher::Default if cfg!(target_os = "macos") => {
+        Launcher::Default if cfg!(any(target_os = "macos", target_os = "haiku")) => {
             let mut c = Command::new("open");
             c.arg(path);
             c
@@ -128,6 +128,13 @@ fn find_photocraft() -> Option<Launcher> {
         let install_dir = reg_query(r"HKLM\Software\PhotoCraft", Some("InstallDir"));
         let app_path = reg_query(r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\photocraft.exe", None);
         return windows_candidates(install_dir, app_path, env).into_iter().find(|p| p.is_file()).map(Launcher::Program);
+    }
+    if cfg!(target_os = "haiku") {
+        return ["/boot/system/apps/PhotoCraft", "/boot/home/config/non-packaged/apps/PhotoCraft"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| p.is_file())
+            .map(Launcher::Program);
     }
     // Linux, FreeBSD: on the PATH (.deb, .rpm, tarball), a desktop entry (AppImage, which
     // registers one on first run), else the Flatpak

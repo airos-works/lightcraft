@@ -1,0 +1,3 @@
+#!/bin/sh
+# The Haiku cross g++ with the air/OS sysroot (see env.sh).
+exec "$HAIKU_CROSS-g++" --sysroot="$HAIKU_SYSROOT" "$@"

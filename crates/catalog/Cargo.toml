@@ -22,3 +22,8 @@ web-time = { workspace = true }
 [dev-dependencies]
 lightcraft-geom = { workspace = true }
 proptest = { workspace = true }
+
+# std::fs::File locking is not implemented for Haiku; use the same safe
+# rustix flock binding as the PdfCraft port. No dependency on other targets.
+[target.'cfg(target_os = "haiku")'.dependencies]
+rustix = { version = "1", features = ["fs"] }

@@ -155,3 +155,10 @@ evaluates it (`.github/workflows/nix.yml`), so the build may lag behind the work
   GitHub profiles). Never hand-edit `contributors.json`.
 - Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
   re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## air/OS fork
+The user-authorized port reuses the native Be API boundary from the sibling *craft
+ports. `apps/lightcraft-haiku-host` is the isolated exception to the pure-Rust
+platform binding rule: its small C++ host calls the OS, and its safe Rust API
+contains documented FFI. The app, UI and processing crates remain safe Rust.
+The full library/develop workflow must be retained.

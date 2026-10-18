@@ -1,0 +1,350 @@
+{
+  "date": "2026-10-19",
+  "upstreamBase": "31a677fe",
+  "appVersion": "0.9.1",
+  "platform": "air/OS / Haiku x86_64",
+  "benchmark": {
+    "source": "procedural 6000x4000 RGB source from upstream render_bench",
+    "samples": 3,
+    "selection": "best wall time of three runs, eight Rayon workers",
+    "note": "Photo pipeline timings exclude window drawing, file decode and JPEG encoding. Cold means a new stage cache; driver shaders were warmed."
+  },
+  "devices": {
+    "amd": {
+      "kernel": "hrev60206+1566",
+      "adapter": "AMD Radeon 760M (RADV PHOENIX)",
+      "driver": "Mesa 25.3.6 git-006c0504b9",
+      "backend": "Vulkan",
+      "hardwareAdapter": true,
+      "pipelineBenchmarks": {
+        "previewCold": {
+          "cpuMs": 454.9,
+          "gpuMs": 64.7,
+          "speedup": 7.03
+        },
+        "exposureWarm": {
+          "cpuMs": 40.5,
+          "gpuMs": 9.0,
+          "speedup": 4.5
+        },
+        "draftHighlightsWarm": {
+          "cpuMs": 16.3,
+          "gpuMs": 4.0,
+          "speedup": 4.08
+        },
+        "zoomedExposureWarm": {
+          "cpuMs": 121.1,
+          "gpuMs": 25.2,
+          "speedup": 4.81
+        },
+        "export24Mp": {
+          "cpuMs": 4454.6,
+          "gpuMs": 1761.9,
+          "speedup": 2.53
+        }
+      },
+      "syntheticParity": {
+        "maximum8BitChannelDifference": 1,
+        "meanPreview": 0.0001,
+        "meanZoomedView": 0.0004,
+        "meanExport": 0.0008
+      },
+      "editedRawParity": {
+        "size": [
+          4032,
+          3024
+        ],
+        "maxChannelDifference": 1,
+        "meanChannelDifference": 2.0093878600823045e-05,
+        "comparison": "PNG export of edited 12.2 MP DNG, exposure +0.6, highlights -30, shadows +20, radial mask exposure +0.25"
+      },
+      "unchangedWindowFrame": {
+        "samples": [
+          0.063,
+          0.026,
+          0.039,
+          0.026,
+          0.026,
+          0.027,
+          0.041,
+          0.026,
+          0.026,
+          0.026,
+          0.026,
+          0.041,
+          0.027,
+          0.026,
+          0.027,
+          0.041,
+          0.028,
+          0.027,
+          0.027,
+          0.027,
+          0.027,
+          0.027,
+          0.037,
+          0.034999999999999996,
+          0.027,
+          0.027,
+          0.026,
+          0.027,
+          0.041999999999999996,
+          0.041
+        ],
+        "medianMs": 0.027,
+        "minMs": 0.026,
+        "maxMs": 0.063,
+        "gpu": "AMD Radeon 760M Graphics (RADV PHOENIX) (Vulkan)",
+        "window": [
+          1186.28125,
+          756.0
+        ],
+        "pixelsPerPoint": 1.75
+      },
+      "nativeTests": {
+        "catalog": {
+          "passed": 223,
+          "ignored": 2
+        },
+        "gpuUnit": {
+          "passed": 30,
+          "ignored": 4
+        },
+        "gpuEquivalence": {
+          "passed": 17
+        },
+        "gpuFallback": {
+          "passed": 1
+        },
+        "gpuMemory": {
+          "passed": 1
+        },
+        "gpuShutdown": {
+          "passed": 2
+        },
+        "gpuProbe": {
+          "passed": 1
+        },
+        "nativeHost": {
+          "passed": 48
+        },
+        "photoDeviceLoss": {
+          "passed": 1,
+          "method": "Actual wgpu device destruction in a separate executable; CPU render and subsequent GPU refusal verified."
+        },
+        "cleanupPanicRegression": {
+          "passed": true,
+          "negativeControl": "The same synthetic Drop panic escapes with the former scope placement; fixed placement returns Err without unwinding the caller."
+        }
+      },
+      "workflows": {
+        "rawImport": true,
+        "developAndRadialMask": true,
+        "undoRedo": true,
+        "jpegAndPngExport": true,
+        "libraryReopenPreservesEdits": true,
+        "secondOpenerRefused": true,
+        "nativeFileReferences": true,
+        "nativeFilePanelCancel": true,
+        "nativeClipboardRoundTrip": true,
+        "explicitCpuWindow": true,
+        "missingDriverCpuFallback": true,
+        "previousCrashCpuRecovery": true,
+        "deviceLossCallbackAndCpuTextures": true,
+        "photoCraftPsdHandoff": {
+          "opened": true,
+          "size": [
+            4032,
+            3024
+          ],
+          "depth": 8,
+          "mode": "Rgb",
+          "layerCount": 1
+        }
+      }
+    },
+    "nvidia": {
+      "kernel": "hrev60206+1547",
+      "adapter": "NVIDIA GeForce GTX 1070 (NVK GP104-A)",
+      "driver": "Mesa 25.3.0-devel git-fb38f2207c",
+      "backend": "Vulkan",
+      "hardwareAdapter": true,
+      "pipelineBenchmarks": {
+        "previewCold": {
+          "cpuMs": 1211.5,
+          "gpuMs": 110.8,
+          "speedup": 10.93
+        },
+        "exposureWarm": {
+          "cpuMs": 66.3,
+          "gpuMs": 14.6,
+          "speedup": 4.54
+        },
+        "draftHighlightsWarm": {
+          "cpuMs": 26.1,
+          "gpuMs": 6.8,
+          "speedup": 3.84
+        },
+        "zoomedExposureWarm": {
+          "cpuMs": 180.1,
+          "gpuMs": 39.6,
+          "speedup": 4.55
+        },
+        "export24Mp": {
+          "cpuMs": 10949.4,
+          "gpuMs": 1762.4,
+          "speedup": 6.21
+        }
+      },
+      "syntheticParity": {
+        "maximum8BitChannelDifference": 1,
+        "meanPreview": 0.0001,
+        "meanZoomedView": 0.0004,
+        "meanExport": 0.0008
+      },
+      "editedRawParity": {
+        "size": [
+          4032,
+          3024
+        ],
+        "maxChannelDifference": 1,
+        "meanChannelDifference": 2.2800401024607373e-05,
+        "comparison": "PNG export of edited 12.2 MP DNG, exposure +0.6, highlights -30, shadows +20, radial mask exposure +0.25"
+      },
+      "unchangedWindowFrame": {
+        "samples": [
+          0.054,
+          0.055,
+          0.058,
+          0.053,
+          0.053,
+          0.055,
+          0.089,
+          0.054,
+          0.053,
+          0.053,
+          0.056,
+          0.056,
+          0.053,
+          0.053,
+          0.058,
+          0.057,
+          0.056,
+          0.060000000000000005,
+          0.056,
+          0.057,
+          0.056,
+          0.058,
+          0.055,
+          0.057,
+          0.059,
+          0.059,
+          0.058,
+          0.056,
+          0.056,
+          0.056
+        ],
+        "medianMs": 0.056,
+        "minMs": 0.053,
+        "maxMs": 0.089,
+        "gpu": "NVIDIA GeForce GTX 1070 (NVK GP104-A) (Vulkan)",
+        "window": [
+          1600.0,
+          951.0
+        ],
+        "pixelsPerPoint": 2.0
+      },
+      "nativeTests": {
+        "catalog": {
+          "passed": 223,
+          "ignored": 2
+        },
+        "gpuUnit": {
+          "passed": 30,
+          "ignored": 4
+        },
+        "gpuEquivalence": {
+          "passed": 17
+        },
+        "gpuFallback": {
+          "passed": 1
+        },
+        "gpuMemory": {
+          "passed": 1
+        },
+        "gpuShutdown": {
+          "passed": 2
+        },
+        "gpuProbe": {
+          "passed": 1
+        },
+        "nativeHost": {
+          "passed": 48
+        },
+        "photoDeviceLoss": {
+          "passed": 1,
+          "method": "Actual wgpu device destruction in a separate executable; CPU render and subsequent GPU refusal verified."
+        },
+        "cleanupPanicRegression": {
+          "passed": true,
+          "negativeControl": "The same synthetic Drop panic escapes with the former scope placement; fixed placement returns Err without unwinding the caller."
+        }
+      },
+      "workflows": {
+        "rawImport": true,
+        "developAndRadialMask": true,
+        "undoRedo": true,
+        "jpegAndPngExport": true,
+        "libraryReopenPreservesEdits": true,
+        "secondOpenerRefused": true,
+        "nativeFileReferences": true,
+        "nativeFilePanelCancel": true,
+        "nativeClipboardRoundTrip": true,
+        "explicitCpuWindow": true,
+        "missingDriverCpuFallback": true,
+        "previousCrashCpuRecovery": true,
+        "deviceLossCallbackAndCpuTextures": true,
+        "photoCraftPsdHandoff": {
+          "opened": true,
+          "size": [
+            4032,
+            3024
+          ],
+          "depth": 8,
+          "mode": "Rgb",
+          "layerCount": 1
+        },
+        "realDriverResetRecovery": {
+          "reproduced": true,
+          "nativeWindow": "CPU bitmap",
+          "photoGpuFallback": "a GPU render panicked; the GPU is not used again",
+          "loupeSource": "render",
+          "failed": null,
+          "pending": false,
+          "result": "Full preview completed automatically after the fix; no render failed placeholder."
+        }
+      },
+      "privateDriverSha256": "00aeaee9cb7c9f8aaf481433fce4fefb96f4e6ad7425f010aed9a7a95855b09d",
+      "privateDriverScope": "App-private manifest; no system driver replacement; tested without launch-time Vulkan overrides.",
+      "limitations": [
+        "Experimental NVK reset during both concurrent LightCraft / PhotoCraft GPU handoff attempts. Its timeout temporarily stalls the window; the application cannot prevent hardware/driver resets."
+      ]
+    }
+  },
+  "fixture": {
+    "name": "coverage-915.dng",
+    "source": "https://raw.pixls.us/getfile.php/915/nice/Apple%20-%20iPhone%206s%20Plus%20-%2016bit%20%284:3%29.DNG",
+    "sha256": "845fee4f09c832af3728778737f5ae9b99124debb821b6e2066b94aed1daa91c",
+    "license": "CC0, pinned by the upstream coverage corpus",
+    "size": [
+      4032,
+      3024
+    ]
+  },
+  "hostBenchmarkCheck": {
+    "command": "cargo xtask bench",
+    "platform": "Linux x86_64 build host; CPU pipeline",
+    "metrics": 40,
+    "result": "No CPU-time regressions greater than 20 percent versus the pre-port baseline. Wall times are affected by shared-host load."
+  }
+}

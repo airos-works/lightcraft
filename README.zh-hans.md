@@ -1,12 +1,4 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
-
+本独立分支为 LightCraft 添加 air/OS（Haiku）原生窗口和 Vulkan 加速。构建与验证说明见 [docs/haiku.md](docs/haiku.md)。上游项目不维护此移植版本。
 
 <h1 align="center">LightCraft</h1>
 
@@ -580,10 +572,11 @@ ArtCraft 团队的商标，不在本许可范围内。它们只能在未修改�
 分支和修改版本必须移除它们。
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
   <sub>由 <a href="https://getartcraft.com/">ArtCraft</a> 团队和社区制作。</sub>
 </p>
 
 ## Star history
 
 [![Star History Chart](https://api.star-history.com/svg?repos=storytold/lightcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Flightcraft&type=date&legend=top-left)
+
+The upstream ArtCraft marks are omitted from this modified distribution under their [license](docs/brand/LICENSE-brand.txt).

@@ -445,8 +445,16 @@ impl Gpu {
         drop(f);
         if !dropped.is_empty() {
             drop(dropped);
-            // let wgpu release the memory now rather than at its next maintenance
-            let _ = self.device.poll(wgpu::PollType::Poll);
+            // A lost device can make even a nonblocking poll panic. This path
+            // also runs from RenderScope::drop, so it must never escape while a
+            // render is unwinding. The lost device owns no reusable GPU work.
+            if !std::thread::panicking() && !crate::BROKEN.load(Ordering::Relaxed) {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.device.poll(wgpu::PollType::Poll))) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => crate::mark_broken(&format!("GPU memory maintenance failed: {e}")),
+                    Err(_) => crate::mark_broken("GPU memory maintenance panicked after device failure"),
+                }
+            }
         }
     }
 

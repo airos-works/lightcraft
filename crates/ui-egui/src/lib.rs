@@ -315,6 +315,9 @@ pub struct Perf {
     /// The previous frame's whole time on this thread, painting (texture uploads) included, as
     /// the host reports it (eframe's `cpu_usage`); `None` without a host report (headless).
     pub host_frame_ms: Option<f64>,
+    /// Optional native-host renderer and draw/readback time.
+    pub host_renderer: Option<&'static str>,
+    pub host_render_ms: Option<f64>,
     pub fps: f64,
 }
 

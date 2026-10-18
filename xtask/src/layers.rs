@@ -65,6 +65,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("testkit", Class::Testkit),
     // L6 apps and tooling
     ("lightcraft", Class::Exempt),
+    ("haiku", Class::Exempt),
+    ("haiku-host", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),

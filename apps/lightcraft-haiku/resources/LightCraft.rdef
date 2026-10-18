@@ -1,0 +1,11 @@
+resource app_signature "application/x-vnd.jmgasper-LightCraft";
+// Preserve this attribute inside the hpkg for Tracker's initial document refs.
+resource(2, "BEOS:TYPE") #'MIMS' "application/x-vnd.Be-elfexecutable";
+resource app_flags B_MULTIPLE_LAUNCH;
+resource app_version {
+    major = 0, middle = 9, minor = 1, variety = B_APPV_DEVELOPMENT, internal = 2,
+    short_info = "LightCraft 0.9.1",
+    long_info = "LightCraft photo library and RAW developer for air/OS (MIT or Apache-2.0)."
+};
+resource vector_icon { import "LightCraft.hvif" };
+resource file_types message { "types" = "image/png", "types" = "image/jpeg", "types" = "image/tiff", "types" = "image/x-adobe-dng" };

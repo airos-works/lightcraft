@@ -3112,6 +3112,7 @@ dependencies = [
  "lightcraft-raw",
  "log",
  "proptest",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3321,6 +3322,34 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "wgpu",
+]
+
+[[package]]
+name = "lightcraft-haiku"
+version = "0.9.1"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "image",
+ "lightcraft-codecs",
+ "lightcraft-engine",
+ "lightcraft-haiku-host",
+ "lightcraft-raster",
+ "lightcraft-sysmem",
+ "lightcraft-testkit",
+ "lightcraft-ui-egui",
+ "log",
+ "pollster 1.0.1",
+ "rayon",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
+name = "lightcraft-haiku-host"
+version = "0.9.1"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -6388,8 +6417,6 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "wgpu"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "527ccdf43dd5b2e8676eed9984ce00e2bbb0a1b85b70c1969dcb6cd2eb55ab9e"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -6418,8 +6445,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -6480,8 +6505,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7586165fd5f6d881cb9ce4bb71f40d6caab2c0f1837e3fc1d9788a197fb6004f"
 dependencies = [
  "wgpu-hal",
 ]

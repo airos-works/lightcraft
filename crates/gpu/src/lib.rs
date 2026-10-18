@@ -137,7 +137,7 @@ impl Fallback {
     }
 }
 
-/// A simulated GPU failure for the next [`render`] on this thread (tests of the CPU fallback).
+/// A GPU failure for the next [`render`] on this thread (tests of the CPU fallback).
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
@@ -148,6 +148,9 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// Destroy the real device during the next render. Only for a dedicated test
+    /// process: unlike the simulated faults this invalidates every thread's device.
+    DeviceLost,
 }
 
 thread_local! {
@@ -160,7 +163,8 @@ thread_local! {
 }
 
 /// Make the next [`render`] on this thread fail with `f` (tests). A fatal `f` then stops GPU use
-/// on this thread only, until [`reset_failures`].
+/// on this thread only, until [`reset_failures`], except [`Fault::DeviceLost`], which
+/// permanently destroys the process-wide device and requires its own test executable.
 #[doc(hidden)]
 pub fn inject_fault(f: Fault) {
     FAULT.with(|c| c.set(Some(f)));
@@ -447,6 +451,15 @@ pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: 
     depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
+/// Keep scope construction and destruction inside the same boundary as GPU work.
+#[cfg(not(target_arch = "wasm32"))]
+fn guarded_scope<S, R>(scope: impl FnOnce() -> S, work: impl FnOnce() -> R) -> std::thread::Result<R> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _scope = scope();
+        work()
+    }))
+}
+
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
 /// was not used (callers can ask [`unavailable_reason`]), [`Fallback::Failed`] with the reason
 /// when the GPU render failed and the CPU must render it. The reason belongs to this call, unlike
@@ -473,13 +486,30 @@ pub fn try_render(
         let ext = stages.map(|c| c.extension::<GpuStages>());
         let fault = take_fault();
         // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
-        let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
+        let stop = |reason: &str| {
+            if fault.is_some() && fault != Some(Fault::DeviceLost) {
+                mark_broken_here(reason);
+            } else {
+                mark_broken(reason);
+            }
+        };
         let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
-        let (r, scoped) = {
-            let _scope = ctx::RenderScope::new(gpu);
-            let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
-            (r, errors.pop())
+        if fault == Some(Fault::DeviceLost) {
+            gpu.device.destroy();
+        }
+        // Error-scope completion and buffer-pool maintenance also call the driver.
+        // A device reset can panic there after the rendering closure was caught.
+        // Keep the entire GPU scope inside the fallback boundary, including Drop.
+        let (r, scoped) = match guarded_scope(
+            || ctx::RenderScope::new(gpu),
+            || {
+                let errors = ctx::ErrorScopes::push(gpu);
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+                (r, errors.pop())
+            },
+        ) {
+            Ok(result) => result,
+            Err(panic) => (Err(panic), None),
         };
         // An error the device raised explains the readback failures that follow it; a buffer
         // over the limit explains the errors its placeholder raises.
@@ -491,6 +521,9 @@ pub fn try_render(
             (Err(_), _) => {
                 log::error!("gpu: render failed; using the CPU pipeline from now on");
                 stop("a GPU render panicked");
+                if let Some(e) = &ext {
+                    e.clear();
+                }
                 "a GPU render panicked; the GPU is not used again".to_string()
             }
             (Ok(r), Some(f)) => {
@@ -541,6 +574,25 @@ pub fn try_render(
 #[cfg(test)]
 mod tests {
     use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn driver_panics_in_scope_cleanup_stay_inside_the_render_boundary() {
+        struct LostDeviceCleanup;
+        impl Drop for LostDeviceCleanup {
+            fn drop(&mut self) {
+                panic!("Device::poll: parent device is lost");
+            }
+        }
+        // The old layout constructed RenderScope outside catch_unwind. Its Drop
+        // escaped after a successful or already-caught failed render.
+        let outer = std::panic::catch_unwind(|| super::guarded_scope(|| LostDeviceCleanup, || 42));
+        assert!(outer.is_ok(), "cleanup escaped the render boundary");
+        assert!(outer.unwrap().is_err(), "cleanup failure must request CPU fallback");
+        let outer = std::panic::catch_unwind(|| super::guarded_scope(|| (), || panic!("error scope completion failed")));
+        assert!(outer.is_ok());
+        assert!(outer.unwrap().is_err());
+    }
 
     // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),
     // the GPU doesn't take it; the loupe and diagnostic overlays it can draw stay on the GPU
