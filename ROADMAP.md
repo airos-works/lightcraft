@@ -1,5 +1,7 @@
 # LightCraft roadmap
 
+**air/OS icon update, 2026-10-26:** original Haiku-style native vector icon, with reproducible HVIF/SVG generation and a package revision bump. Validated with Haiku resource compilation and native renders from 16 to 256px; see [native icon](docs/haiku.md#native-application-icon-2026-10-26).
+
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6

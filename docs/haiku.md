@@ -122,3 +122,29 @@ briefly stalls the window before recovery. The application cannot
 prevent a driver reset; after a device failure it disables that device and uses
 the CPU. Users encountering repeated resets should use `LIGHTCRAFT_RENDERER=cpu`
 or a stable driver. No system driver configuration is changed by the package.
+
+## Native application icon (2026-10-26)
+
+The air/OS icon is an original photo collection and exposure dial, licensed under
+MIT OR Apache-2.0. Its 64-unit vector drawing follows the
+[Haiku icon guidelines](https://www.haiku-os.org/development/icon-guidelines):
+vertical edges stay upright in perspective, the main light comes from the top
+left, the right faces are darker, a floor shadow extends to the right, and the
+silhouette has a two-unit black outline (one pixel at 32px). Broad details are
+intended to remain legible at 16px and 32px. No fonts or third-party artwork are used.
+
+Rebuild both the native HVIF and its SVG preview from this checkout:
+
+```sh
+python3 tools/haiku/make-icon.py
+```
+
+`apps/lightcraft-haiku/resources/LightCraft.hvif` is the packaged icon;
+`apps/lightcraft-haiku/resources/LightCraft.svg` exports the same geometry for inspection.
+The existing `.rdef` imports the HVIF, and `tools/haiku/package.sh` embeds it in
+the executable's resources. Tracker and Deskbar therefore use the vector icon.
+The upstream icons for other platforms remain separate. Native previews can be
+rendered on Haiku with `BIconUtils::GetVectorIcon`; review at 16, 32, 64 and 128px
+on light and dark backgrounds before changing the drawing.
+
+Package version `0.9.1~airos1-3` includes this icon update.
