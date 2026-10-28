@@ -3,8 +3,10 @@
 //! Usage: `lightcraft [--library DIR | --memory] [--no-demo] [--control <port>] [files or folders…]`
 //!
 //! The library (catalog, presets, thumbnail cache) lives in `--library DIR`, else
-//! `$LIGHTCRAFT_LIBRARY`, else the library last opened with Settings → Open Library…, else
-//! `~/Pictures/LightCraft Library`; a new library starts with the
+//! `$LIGHTCRAFT_LIBRARY`, else — with Settings ▸ General ▸ At launch set to *Ask me*, or Alt/Option
+//! held as the window appears — the one chosen in a list of the recent libraries, else the library
+//! last opened, else `~/Pictures/LightCraft Library`
+//! ([`lightcraft_ui_egui::panels::library_problem::launch_plan`]); a new library starts with the
 //! procedural demo photos unless `--no-demo` or files are given. Files and folders on the command
 //! line are imported (duplicates are skipped). `--memory` runs an in-memory session that writes
 //! nothing (demo photos unless files are given; used by the README showcase scripts). A library
@@ -23,8 +25,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
-mod common;
-use common::*;
 mod appearance;
 #[cfg(target_os = "linux")]
 mod colord;
@@ -40,10 +40,28 @@ mod screen_profile;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
+use lightcraft_engine::Session;
+use lightcraft_ui_egui::panels::library_problem::{Launch, LibraryProblem};
+use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
 
+mod gpu_crash;
+mod launch;
+mod platform;
+mod prefs;
+mod session;
+
+use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lost_reason, record_gpu_lost, window_files};
 #[cfg(test)]
-use lightcraft_ui_egui::UiState;
-use lightcraft_ui_egui::{LightcraftApp, Services};
+use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
+#[cfg(test)]
+use launch::launch_imports_in;
+use launch::{HELP, control_port_from, launch_imports, log_dir, panic_log_path_with, startup_failed, stopped_text, stopped_while_running};
+#[cfg(test)]
+use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
+use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
+#[cfg(test)]
+use prefs::{load_prefs_at, write_atomic};
+use session::{open_session, services};
 
 /// Reverse-DNS app id: Wayland app id, `.desktop` file and hicolor icon name.
 const APP_ID: &str = "ai.storyteller.lightcraft";
@@ -76,8 +94,10 @@ impl eframe::App for App {
         self.0.logic(ctx);
         self.1.tick(&mut self.0, ctx);
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+    /// Forwards the host's raw-input pass to the app's hook before egui processes it, keeping
+    /// modal/prompt input barriers and queued synthetic or dropped input ahead of the panels.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
@@ -113,331 +133,12 @@ impl eframe::App for App {
 /// a second; anything slower gives way to quitting.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// The window's renderer (egui-wgpu): eframe's defaults, with LightCraft's backend choice — DX12
-/// alone on Windows unless `LIGHTCRAFT_GPU_BACKEND` / `WGPU_BACKEND` say otherwise (issue #136:
-/// with Vulkan in the set, wgpu loads the Vulkan driver even when it then picks DX12) — and DX12
-/// shaders compiled with FXC, never a stray `dxcompiler.dll` (issue #471).
-/// The fallback chain on top of it (DX12 → Vulkan → GL → glow) is in `window_gpu`.
-#[cfg(test)]
-fn window_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
-    window_gpu::base_options()
-}
-
-/// Where the window's renderer files live (`window_gpu::Files`): nothing for `--memory` sessions
-/// and `LIGHTCRAFT_NO_PREFS`.
-fn window_files(in_memory: bool) -> window_gpu::Files {
-    window_gpu::Files::new(config_dir().filter(|_| !in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()))
-}
-
-/// Where the system keeps monitor profiles, for the Choose Profile dialog to start in: the user's
-/// own profiles first (Linux: colord / DisplayCAL; macOS: ColorSync), then the system's.
-fn display_profile_dir() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
-    let user = |rel: &str| home.as_ref().map(|h| h.join(rel));
-    let candidates: Vec<Option<std::path::PathBuf>> = if cfg!(target_os = "macos") {
-        vec![user("Library/ColorSync/Profiles"), Some("/Library/ColorSync/Profiles".into())]
-    } else if cfg!(windows) {
-        let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
-        vec![Some(root.join("System32").join("spool").join("drivers").join("color"))]
-    } else {
-        let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map(std::path::PathBuf::from).or_else(|| user(".local/share"));
-        vec![data.map(|d| d.join("icc")), user(".color/icc"), Some("/usr/share/color/icc".into())]
-    };
-    candidates.into_iter().flatten().find(|d| d.is_dir())
-}
-
-/// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
-/// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
-/// opens is the system's to say.
-fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
-    let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
-    // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
-    // to a size of its own choosing)
-    if window.is_some_and(|w| w.zoomed) { builder.with_maximized(true) } else { builder }
-}
-
-/// The Windows command that opens `url` in the default browser. `explorer <url>` opened File
-/// Explorer instead for links with a query or fragment, like the Map button's OpenStreetMap link
-/// (issue #234). The URL protocol handler hands the URL to the browser as is; no shell runs, so
-/// `?`, `&` and `#` need no escaping.
-fn windows_open_url_command(url: &str) -> std::process::Command {
-    let mut c = std::process::Command::new("rundll32");
-    c.args(["url.dll,FileProtocolHandler", url]);
-    c
-}
-
-/// Explorer's `/select,<path>` switch (issue #272). Explorer parses its own command line and only
-/// selects the file when the path after the comma is quoted (`/select,"C:\My Photos\a.jpg"`),
-/// spelled with backslashes and free of the verbatim prefix (`\\?\`, `\\?\UNC\`) that
-/// `canonicalize` adds; given anything else it opens Documents. Windows file names can't contain
-/// `"`; a path that does anyway (a hostile catalog) has them dropped, so the raw command line
-/// always holds exactly this one argument.
-fn explorer_select_arg(path: &str) -> String {
-    let path = path.replace('/', "\\").replace('"', "");
-    let path = match path.strip_prefix(r"\\?\UNC\") {
-        Some(unc) => format!(r"\\{unc}"),
-        None => path.strip_prefix(r"\\?\").unwrap_or(path.as_str()).to_string(),
-    };
-    format!("/select,\"{path}\"")
-}
-
-/// `explorer /select,"<path>"`. Rust's own argument quoting wraps the whole switch in quotes
-/// (`"/select,C:\My Photos\a.jpg"`) whenever the path has a space, which Explorer doesn't
-/// recognise, so on Windows the switch goes on the command line exactly as built.
-fn explorer_select_command(path: &str) -> std::process::Command {
-    let mut c = std::process::Command::new("explorer");
-    let arg = explorer_select_arg(path);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.raw_arg(arg);
-    }
-    #[cfg(not(windows))]
-    {
-        c.arg(arg);
-    }
-    c
-}
-
-/// The file dialogs' parent, set once the window exists (`services`). A dialog with a parent is
-/// a child of the app's window; without one, the xdg-desktop-portal picker on Wayland is a stray
-/// top-level ("Failed to associate portal window with parent window" in the portal's log): a
-/// tiling compositor puts it beside the app, and a fullscreen window hides it entirely, so
-/// Import Photos… looks like a hang. rfd exports the Wayland surface through xdg_foreign itself;
-/// `FileDialog` is `Clone` and `Send`, so one parented template serves every picker, including
-/// the one on its own thread (#191). Only set on Linux and FreeBSD: on macOS a parented dialog
-/// becomes a sheet and on Windows a modal, a behaviour change this does not make.
-static DIALOG_PARENT: std::sync::OnceLock<rfd::FileDialog> = std::sync::OnceLock::new();
-
-/// A file dialog owned by the app's window, or a plain one before the window exists.
-fn file_dialog() -> rfd::FileDialog {
-    DIALOG_PARENT.get().cloned().unwrap_or_default()
-}
-
-/// The platform services; `cc` is the window the file dialogs belong to (its `egui_ctx` repaints
-/// when a dialog closes), and `log_file` is for Help ▸ Open Log Folder.
-fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>) -> Services {
-    let ctx = cc.egui_ctx.clone();
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    let _ = DIALOG_PARENT.set(rfd::FileDialog::new().set_parent(cc));
-    Services {
-        // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
-        // stopped the window answering the compositor, which then reported the app as hung.
-        picker: Some(Box::new(move |req: lightcraft_ui_egui::pick::PickRequest| {
-            use lightcraft_ui_egui::pick::PickKind;
-            let (tx, rx) = std::sync::mpsc::channel();
-            let repaint = ctx.clone();
-            std::thread::Builder::new()
-                .name("file-dialog".into())
-                .spawn(move || {
-                    let mut d = file_dialog();
-                    if let Some(t) = &req.title {
-                        d = d.set_title(t);
-                    }
-                    if let Some((name, exts)) = &req.filter {
-                        d = d.add_filter_nocase(name.clone(), exts);
-                    }
-                    if let Some(n) = &req.file_name {
-                        d = d.set_file_name(n);
-                    }
-                    let s = |p: std::path::PathBuf| p.to_string_lossy().to_string();
-                    let paths: Vec<String> = match req.kind {
-                        PickKind::Files => d.pick_files().unwrap_or_default().into_iter().map(s).collect(),
-                        PickKind::File => d.pick_file().map(s).into_iter().collect(),
-                        PickKind::Folder => d.pick_folder().map(s).into_iter().collect(),
-                        PickKind::Save => d.save_file().map(s).into_iter().collect(),
-                    };
-                    // the app may have quit meanwhile: nobody to tell
-                    let _ = tx.send(paths);
-                    repaint.request_repaint();
-                })
-                .map_err(|e| format!("could not start the file dialog: {e}"))?;
-            Ok(rx)
-        })),
-        log_file: log_file.map(|p| p.display().to_string()),
-        pick_lightroom_catalog: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Lightroom Catalog"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Lightroom Classic Catalog"), &["lrcat"])
-                .pick_file()
-                .map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_folder: Some(Box::new(|| {
-            file_dialog().set_title(lightcraft_ui_egui::i18n::tr("Open Library")).pick_folder().map(|p| p.to_string_lossy().to_string())
-        })),
-        #[cfg(target_os = "linux")]
-        open_model_folder: Some(std::sync::Arc::new(|path: &str| {
-            std::process::Command::new("xdg-open")
-                .arg(path)
-                .status()
-                .map_err(|e| e.to_string())
-                .and_then(|s| if s.success() { Ok(()) } else { Err(format!("opening folder failed: {s}")) })
-        })),
-        open_with: Some(Box::new(editors::open_with)),
-        open_all_with: Some(Box::new(editors::open_all_with)),
-        check_editor: Some(Box::new(editors::check)),
-        open_url: Some(Box::new(|url: &str| {
-            if !url.starts_with("https://") {
-                return Err("only https links are opened".into());
-            }
-            let status = if cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(url).status()
-            } else if cfg!(target_os = "windows") {
-                windows_open_url_command(url).status()
-            } else {
-                std::process::Command::new("xdg-open").arg(url).status()
-            };
-            status.map(|_| ()).map_err(|e| e.to_string())
-        })),
-        reveal: Some(Box::new(|path: &str| {
-            let status = if cfg!(target_os = "macos") {
-                std::process::Command::new("open").args(["-R", path]).status()
-            } else if cfg!(target_os = "windows") {
-                explorer_select_command(path).status()
-            } else {
-                let dir = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_else(|| ".".into());
-                std::process::Command::new("xdg-open").arg(dir).status()
-            };
-            status
-                .map_err(|e| e.to_string())
-                .and_then(|s| if s.success() || cfg!(target_os = "windows") { Ok(()) } else { Err(format!("reveal failed: {s}")) })
-        })),
-        pick_files: Some(Box::new(|| {
-            file_dialog()
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS)
-                .pick_files()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
-        })),
-        pick_denoise_model: Some(Box::new(|| {
-            file_dialog()
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("ONNX model"), &["onnx"])
-                .pick_file()
-                .map(|p| vec![p.to_string_lossy().into_owned()])
-                .unwrap_or_default()
-        })),
-        pick_preset_files: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Presets"))
-                .add_filter_nocase(
-                    lightcraft_ui_egui::i18n::tr("Presets & Profiles"),
-                    &["lcpreset", "xmp", "lrtemplate", "zip", "dng", "lmp", "mplumpack", "cube"],
-                )
-                .pick_files()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
-        })),
-        pick_model_file: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Add a Face Recognition Model"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Face models (ONNX)"), &["onnx"])
-                .pick_file()
-                .map(|p| vec![p.to_string_lossy().to_string()])
-                .unwrap_or_default()
-        })),
-        pick_tracklog: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Auto-Tag from Tracklog"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("GPS Track Log"), &["gpx"])
-                .pick_file()
-                .map(|p| vec![p.to_string_lossy().to_string()])
-                .unwrap_or_default()
-        })),
-        // macOS doesn't colour-manage the window: previews follow the screen's profile (#787)
-        #[cfg(target_os = "macos")]
-        screen_profile: Some(Box::new(screen_profile::icc)),
-        // Linux: the profile the desktop assigns in colord, read off the UI thread
-        #[cfg(target_os = "linux")]
-        screen_profile: Some(colord::service()),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        screen_profile: None,
-        pick_display_profile: Some(Box::new(|| {
-            let mut d = file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Choose Monitor Profile"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("ICC Profiles"), &["icc", "icm"]);
-            if let Some(dir) = display_profile_dir() {
-                d = d.set_directory(dir);
-            }
-            d.pick_file().map(|p| vec![p.to_string_lossy().to_string()]).unwrap_or_default()
-        })),
-        save_preset_file: Some(Box::new(|name: &str| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("LightCraft Preset"), &["lcpreset"])
-                .set_file_name(name)
-                .save_file()
-                .map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_keyword_list: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Keywords"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyword Lists"), &["txt", "utf8"])
-                .pick_file()
-                .map(|p| vec![p.to_string_lossy().to_string()])
-                .unwrap_or_default()
-        })),
-        save_keyword_list: Some(Box::new(|name: &str| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Keywords"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyword Lists"), &["txt"])
-                .set_file_name(name)
-                .save_file()
-                .map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_curve_preset_files: Some(Box::new(|| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Point Curve Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve", "json"])
-                .pick_files()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
-        })),
-        save_curve_preset_file: Some(Box::new(|name: &str| {
-            file_dialog()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Point Curve Presets"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Point Curve Presets"), &["lccurve"])
-                .set_file_name(name)
-                .save_file()
-                .map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_slideshow_templates: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Import Slideshow Templates"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
-                .pick_files()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
-        })),
-        save_slideshow_template: Some(Box::new(|name: &str| {
-            rfd::FileDialog::new()
-                .set_title(lightcraft_ui_egui::i18n::tr("Export Slideshow Template"))
-                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
-                .set_file_name(name)
-                .save_file()
-                .map(|p| p.to_string_lossy().to_string())
-        })),
-        // atomic (temp file + sync + rename): a failed write never leaves a truncated file
-        write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
-        write: Some(Box::new(lightcraft_engine::export::write_file)),
-        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
-            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
-        })),
-        // the library is a folder on disk: backed up with the user's other files
-        backup_library: None,
-        restore_library: None,
-        system_theme: appearance::service(),
-    }
-}
-
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::LIGHTCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
     lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
@@ -497,15 +198,15 @@ fn main() -> eframe::Result {
     if let Some(ui) = &prefs {
         lightcraft_ui_egui::i18n::set_language(ui.language);
     }
-    // --library, else the library last opened from Settings, else the default location
-    let library_dir = library_dir.or_else(|| {
-        prefs
-            .as_ref()
-            .map(|u| u.settings.library_path.clone())
-            .filter(|p| !p.is_empty() && std::env::var_os("LIGHTCRAFT_LIBRARY").is_none())
-            .map(Into::into)
-    });
-    let library_dir = library_dir.or_else(lightcraft_engine::library::default_dir);
+    // --library, else LIGHTCRAFT_LIBRARY, else the list of recent libraries if Settings say Ask
+    // me, else the library last opened from Settings, else the default location
+    let launch = lightcraft_ui_egui::panels::library_problem::launch_plan(
+        in_memory,
+        library_dir,
+        std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into),
+        prefs.as_ref().map(|u| &u.settings),
+        lightcraft_engine::library::default_dir(),
+    );
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
     let gpu_crash = gpu_crash_check(in_memory).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
@@ -558,7 +259,7 @@ fn main() -> eframe::Result {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
-                let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+                let (mut session, mut problem) = open_session(in_memory, &launch, seed_demo && files.is_empty());
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
@@ -566,9 +267,15 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
+                // the recent libraries to choose from (issue #1290), checked on a worker once shown
+                if launch == Launch::Ask {
+                    problem = Some(LibraryProblem::choose_later(&app.ui.settings));
+                }
+                app.alt_asks_for_library = matches!(launch, Launch::Open { alt_asks: true, .. });
                 lightcraft_ui_egui::i18n::set_language(app.ui.language);
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
@@ -663,502 +370,6 @@ fn main() -> eframe::Result {
     started
 }
 
-/// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
-/// was lost (`lost`): GPU rendering is off from the next start.
-fn stopped_text(error: &str, lost: Option<&str>) -> String {
-    match lost {
-        Some(reason) => format!(
-            "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
-             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
-        ),
-        None => error.to_string(),
-    }
-}
-
-/// LightCraft stopped while its window was up: say so in the log and in a native message box
-/// naming the log file (as [`startup_failed`] does for a start that failed).
-fn stopped_while_running(text: &str, log_file: Option<&std::path::Path>) {
-    log::error!("LightCraft stopped: {text}");
-    if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
-        return; // tests and scripts: no dialog to click away
-    }
-    let (title, text) = lightcraft_ui_egui::i18n::stopped_message(text, log_file.map(|p| p.display().to_string()).as_deref());
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title(title)
-        .set_description(text)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-/// The window could not start (e.g. no usable graphics device): say so in the log and in a native
-/// message box naming the log file, instead of exiting without a trace — the release builds have
-/// no console on Windows, and an app started from Finder shows no standard error (issue #260).
-fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
-    log::error!("LightCraft could not open its window: {error}");
-    if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
-        return; // tests and scripts: no dialog to click away
-    }
-    let (title, text) = lightcraft_ui_egui::i18n::startup_failed_message(error, log_file.map(|p| p.display().to_string()).as_deref());
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title(title)
-        .set_description(text)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    fn dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("lc-app-prefs-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    /// Issue #374: launch arguments that would walk a whole drive or home folder are reported,
-    /// not imported; empty ones are ignored; the rest are imported as absolute paths.
-    #[test]
-    fn launch_arguments_never_walk_a_drive_or_the_home_folder() {
-        let home = dir("launch");
-        std::fs::create_dir_all(home.join("Trip")).unwrap();
-        let args: Vec<String> = ["", "  ", ".", "Trip", &home.to_string_lossy()].iter().map(|s| s.to_string()).collect();
-        let (files, notices) = launch_imports_in(&args, Some(&home), Some(&home));
-        assert_eq!(files, [home.join("Trip").to_string_lossy().to_string()]);
-        assert_eq!(notices.len(), 2, "{notices:?}");
-        assert!(notices.iter().all(|n| n.contains("was not imported")), "{notices:?}");
-        // the working folder is a drive root (a launcher's choice): `.` is never the whole drive
-        let root = home.ancestors().last().unwrap().to_path_buf();
-        let (files, notices) = launch_imports_in(&[".".to_string()], Some(&root), None);
-        assert!(files.iter().all(|f| f.ends_with("DCIM")) && files.len() + notices.len() == 1, "{files:?} {notices:?}");
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    /// Issue #236: the window answers control requests on its UI thread, so the desktop session
-    /// adds to Apple Photos on a worker (headless sessions wait instead).
-    #[test]
-    fn the_desktop_session_adds_to_apple_photos_in_the_background() {
-        let (s, problem) = open_session(true, None, false);
-        assert!(problem.is_none());
-        assert!(s.apple_photos_background);
-        assert!(!lightcraft_engine::Session::new().apple_photos_background);
-    }
-
-    /// Issue #103: a damaged ui.json (which holds the library location) is kept aside and
-    /// reported, not silently replaced by the defaults.
-    #[test]
-    fn damaged_ui_json_is_kept_and_reported() {
-        let d = dir("damaged");
-        let path = d.join("ui.json");
-        std::fs::write(&path, br#"{"settings": {"library_path": "/Volumes/Photos/Lib"#).unwrap();
-        let (ui, warning, keep) = load_prefs_at(&path, true);
-        assert!(ui.is_none() && !keep);
-        let warning = warning.unwrap();
-        assert!(warning.contains("damaged") && warning.contains("ui.json.corrupt-"), "{warning}");
-        assert!(!path.exists());
-        let kept: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
-        assert!(kept.len() == 1 && kept[0].starts_with("ui.json.corrupt-"), "{kept:?}");
-        // a missing file is just "no settings yet"
-        assert_eq!(load_prefs_at(&path, true).1, None);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Issue #164: a `--memory` session reads the settings but writes nothing — a damaged file is
-    /// reported and left where it is, not set aside.
-    #[test]
-    fn memory_session_leaves_a_damaged_ui_json_alone() {
-        let d = dir("damaged-memory");
-        let path = d.join("ui.json");
-        let bytes = br#"{"settings": {"library_path": "/Volumes/Photos/Lib"#;
-        std::fs::write(&path, bytes).unwrap();
-        let (ui, warning, keep) = load_prefs_at(&path, false);
-        assert!(ui.is_none() && keep);
-        let warning = warning.unwrap();
-        assert!(warning.contains("damaged") && warning.contains("nothing is saved"), "{warning}");
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn docking_survives_native_settings_file_reload() {
-        use lightcraft_ui_egui::docking::Panel;
-        let d = dir("docking-reload");
-        let path = d.join("ui.json");
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-        app.run("ui.dock", serde_json::json!({"operation":"float", "panel":"tools", "rect":[70,80,310,500]})).unwrap();
-        app.run("ui.dock", serde_json::json!({"operation":"close", "panel":"tools"})).unwrap();
-        let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
-        writer.save_ui(&app.ui, false).unwrap();
-        let (restored, warning, keep) = load_prefs_at(&path, false);
-        assert!(warning.is_none());
-        assert!(!keep);
-        let mut restored_app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-        restored_app.ui = restored.unwrap();
-        restored_app.run("ui.dock", serde_json::json!({"operation":"open", "panel":"tools"})).unwrap();
-        assert_eq!(
-            restored_app.ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.panels.contains(&Panel::Tools)).unwrap().rect,
-            [70.0, 80.0, 310.0, 500.0]
-        );
-        std::fs::remove_dir_all(d).unwrap();
-    }
-
-    #[test]
-    fn future_docking_preserves_library_settings_and_the_original_preferences_file() {
-        let d = dir("future-docking");
-        let path = d.join("ui.json");
-        let mut ui = UiState { thumb_size: 210.0, filmstrip: false, ..Default::default() };
-        ui.settings.library_path = "/Volumes/Photos/Synthetic Library".into();
-        for docking in [serde_json::json!({"layout":{"root":{"FutureLayout":{}}}}), serde_json::json!(false)] {
-            let mut saved = serde_json::to_value(&ui).unwrap();
-            saved["docking"] = docking;
-            assert!(serde_json::from_value::<UiState>(saved.clone()).is_err(), "runtime state parsing stays strict");
-            let bytes = serde_json::to_vec(&saved).unwrap();
-            for set_aside in [false, true] {
-                std::fs::write(&path, &bytes).unwrap();
-                let (loaded, warning, keep) = load_prefs_at(&path, set_aside);
-                let loaded = loaded.unwrap();
-                assert_eq!(loaded.settings.library_path, ui.settings.library_path);
-                assert_eq!(loaded.thumb_size, ui.thumb_size);
-                assert!(!loaded.filmstrip);
-                assert!(loaded.docking.is_none());
-                assert!(warning.unwrap().contains("Other settings were loaded"));
-                assert!(keep);
-                let mut writer = PrefsWriter { path: Some(path.clone()), keep_file: keep, ..Default::default() };
-                writer.save_ui(&loaded, false).unwrap();
-                assert_eq!(std::fs::read(&path).unwrap(), bytes);
-                assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "a future layout does not rename or replace the settings file");
-            }
-        }
-        std::fs::remove_dir_all(d).unwrap();
-    }
-
-    /// Issue #164: the writer saves changed settings to its file — and nothing at all without one
-    /// (`--memory`) or while the session is the temporary one offered when the library can't open.
-    #[test]
-    fn prefs_writer_writes_nothing_in_a_memory_or_temporary_session() {
-        let d = dir("writer");
-        let path = d.join("sub").join("ui.json");
-        let mut ui = UiState::default();
-        // an ordinary session: a change is written, the folder created on the way
-        let mut w = PrefsWriter { path: Some(path.clone()), ..Default::default() };
-        ui.thumb_size += 50.0;
-        w.save_ui(&ui, false).unwrap();
-        let saved = std::fs::read(&path).unwrap();
-        assert!(String::from_utf8_lossy(&saved).contains("thumbSize"), "{}", String::from_utf8_lossy(&saved));
-        // the temporary session (library problem): a further change is not written…
-        ui.thumb_size += 50.0;
-        w.save_ui(&ui, true).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), saved);
-        // …until a library opens
-        w.save_ui(&ui, false).unwrap();
-        assert_ne!(std::fs::read(&path).unwrap(), saved);
-        // --memory: no path, so no file and no folder, whatever changes
-        let d2 = dir("writer-memory");
-        let _ = std::fs::remove_dir_all(&d2);
-        let mut w = PrefsWriter { path: None, ..Default::default() };
-        ui.thumb_size += 50.0;
-        w.save_ui(&ui, false).unwrap();
-        assert!(w.written.is_empty() && !d2.exists());
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Issue #169: a `--memory` session neither arms the GPU crash sentinel (which would create
-    /// the settings folder) nor removes a marker a crashed launch left; it still reports it, and
-    /// the next ordinary launch finds it, reports it and clears it.
-    #[test]
-    fn memory_session_leaves_the_gpu_marker_and_folder_alone() {
-        let d = dir("gpu-marker-memory");
-        let _ = std::fs::remove_dir_all(&d);
-        let m = d.join("gpu-init.marker");
-        // nothing left behind: no notice, and the folder is not created
-        assert_eq!(gpu_crash_check_at(Some(m.clone()), true), None);
-        assert!(!d.exists(), "a --memory session must not create the settings folder");
-        // a marker left by a crashed launch: reported, kept
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(&m, "GPU device creation started (backends METAL)").unwrap();
-        let notice = gpu_crash_check_at(Some(m.clone()), true).unwrap();
-        assert!(notice.contains("GPU rendering is now off"), "{notice}");
-        assert!(m.exists(), "the marker stays for the next ordinary launch");
-        // the next ordinary launch reports it once and removes it
-        assert!(gpu_crash_check_at(Some(m.clone()), false).is_some());
-        lightcraft_engine::gpu::backend::set_init_marker(None);
-        assert!(!m.exists());
-        assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
-        lightcraft_engine::gpu::backend::set_init_marker(None);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Issue #1337: the window stopped drawing after the graphics driver reset the GPU during an
-    /// export, and the dialog said the window "could not open". The stop is recorded; the next
-    /// launch says why once and renders on the CPU (a `--memory` session leaves the record).
-    #[test]
-    fn a_gpu_lost_while_running_turns_the_gpu_off_next_time() {
-        let d = dir("gpu-lost");
-        let m = d.join("gpu-lost.marker");
-        assert_eq!(gpu_lost_check_at(Some(&m), false), None, "nothing recorded");
-        assert_eq!(gpu_lost_check_at(None, false), None, "no settings folder");
-        record_gpu_lost(Some(&m), "device lost (Unknown): Device is lost");
-        let notice = gpu_lost_check_at(Some(&m), true).unwrap();
-        assert!(
-            notice.contains("(device lost (Unknown): Device is lost)")
-                && notice.contains("GPU rendering is now off")
-                && notice.contains("Use the GPU for rendering"),
-            "{notice}"
-        );
-        assert!(m.exists(), "a --memory session leaves it");
-        assert!(gpu_lost_check_at(Some(&m), false).is_some());
-        assert!(!m.exists());
-        assert_eq!(gpu_lost_check_at(Some(&m), false), None, "said once");
-        // the message box: LightCraft stopped (not "could not open its window"), and why
-        let text = stopped_text("its window stopped drawing (the renderer panicked)", Some("device lost (Unknown): Device is lost"));
-        assert!(text.contains("reset the GPU (device lost (Unknown)") && text.contains("renders on the CPU from its next start"), "{text}");
-        assert_eq!(stopped_text("its window stopped drawing", None), "its window stopped drawing");
-        let (title, body) = lightcraft_ui_egui::i18n::stopped_message(&text, Some("/logs/lightcraft.log"));
-        assert_eq!(title, "LightCraft stopped");
-        assert!(body.starts_with("LightCraft stopped unexpectedly: its window stopped drawing") && body.ends_with("/logs/lightcraft.log"), "{body}");
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Issue #136: a GPU init marker left by a crashed launch is reported once and removed.
-    #[test]
-    fn gpu_crash_marker_is_reported_once() {
-        let d = dir("gpu-marker");
-        let m = d.join("gpu-init.marker");
-        assert_eq!(lightcraft_engine::gpu::backend::take_init_marker(&m), None);
-        std::fs::write(&m, "GPU device creation started (backends VULKAN | DX12)").unwrap();
-        let what = lightcraft_engine::gpu::backend::take_init_marker(&m).unwrap();
-        let notice = gpu_crash_notice(&what);
-        assert!(notice.contains("GPU rendering is now off") && notice.contains("Use the GPU for rendering"), "{notice}");
-        assert!(!m.exists());
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Issue #136: Windows windows render with DX12 alone (no Vulkan driver loaded) by default.
-    #[test]
-    fn window_backends_follow_the_platform_default() {
-        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
-        let b = n.instance_descriptor.backends;
-        if std::env::var_os("LIGHTCRAFT_GPU_BACKEND").is_none() && std::env::var_os("WGPU_BACKEND").is_none() {
-            if cfg!(windows) {
-                assert_eq!(b, eframe::wgpu::Backends::DX12);
-            } else if cfg!(target_os = "macos") {
-                assert_eq!(b, eframe::wgpu::Backends::METAL);
-            }
-        }
-        assert!(!b.is_empty());
-    }
-
-    /// Issue #471: the window's DX12 shaders compile with FXC — wgpu's default loaded any
-    /// `dxcompiler.dll` on the search path, and one without `dxil.dll` kept the window from opening.
-    #[test]
-    fn window_compiles_dx12_shaders_with_fxc() {
-        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
-        if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
-            assert!(matches!(n.instance_descriptor.backend_options.dx12.shader_compiler, eframe::wgpu::Dx12Compiler::Fxc));
-        }
-    }
-
-    /// Issue #250: the window's device is created without wgpu's indirect-call validation pipeline,
-    /// which Intel Macs' Metal compiler fails to build (the device was lost, the window never opened).
-    #[test]
-    fn window_has_no_indirect_call_validation_pipeline() {
-        let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
-        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
-            assert!(!n.instance_descriptor.flags.contains(eframe::wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
-        }
-    }
-
-    /// Issue #234: Windows opens links with the URL protocol handler (the default browser), not
-    /// File Explorer, and passes the whole map link, `?`, `&` and `#` included, as one argument.
-    #[test]
-    fn windows_links_open_in_the_browser() {
-        let url = "https://www.openstreetmap.org/?mlat=48.856600&mlon=2.352200#map=15/48.856600/2.352200";
-        let c = windows_open_url_command(url);
-        assert_eq!(c.get_program(), "rundll32");
-        let args: Vec<&std::ffi::OsStr> = c.get_args().collect();
-        assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
-    }
-
-    /// Issue #272: Explorer gets the file to select quoted after `/select,`, with backslashes and
-    /// without the verbatim prefix, even when the path has spaces (else it opens Documents).
-    #[test]
-    fn explorer_select_quotes_the_path() {
-        assert_eq!(explorer_select_arg(r"C:\Users\Me\My Photos\IMG 1.jpg"), r#"/select,"C:\Users\Me\My Photos\IMG 1.jpg""#);
-        assert_eq!(explorer_select_arg("D:/Example/Photos/IMG_0001.CR3"), r#"/select,"D:\Example\Photos\IMG_0001.CR3""#);
-        assert_eq!(explorer_select_arg(r"\\server\share\My Photos\a.jpg"), r#"/select,"\\server\share\My Photos\a.jpg""#);
-        assert_eq!(explorer_select_arg(r"\\?\D:\My Photos\a.jpg"), r#"/select,"D:\My Photos\a.jpg""#);
-        assert_eq!(explorer_select_arg(r"\\?\UNC\server\share\a.jpg"), r#"/select,"\\server\share\a.jpg""#);
-        // a `"` can't end the quoted path and add arguments to the raw command line
-        assert_eq!(explorer_select_arg(r#"C:\a" "C:\b.jpg"#), r#"/select,"C:\a C:\b.jpg""#);
-        let c = explorer_select_command(r"C:\My Photos\a.jpg");
-        assert_eq!(c.get_program(), "explorer");
-        let args: Vec<&std::ffi::OsStr> = c.get_args().collect();
-        assert_eq!(args, [r#"/select,"C:\My Photos\a.jpg""#]);
-    }
-
-    #[test]
-    fn a_control_port_that_is_not_a_number_is_ignored() {
-        assert_eq!(control_port_from("--control", Some("7980".into())), Some(7980));
-        assert_eq!(control_port_from("--control", Some(" 18001 ".into())), Some(18001));
-        assert_eq!(control_port_from("--control", Some("nope".into())), None);
-        assert_eq!(control_port_from("--control", Some(String::new())), None);
-        assert_eq!(control_port_from("--control", Some("70000".into())), None);
-        assert_eq!(control_port_from("LIGHTCRAFT_CONTROL_PORT", None), None);
-    }
-
-    #[test]
-    fn ui_json_is_written_atomically() {
-        let d = dir("atomic");
-        let path = d.join("ui.json");
-        std::fs::write(&path, b"old").unwrap();
-        write_atomic(&path, b"{\"new\": true}").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"{\"new\": true}");
-        assert!(!d.join("ui.json.tmp").exists());
-        // a failed write leaves the old file
-        let missing = d.join("gone").join("ui.json");
-        assert!(write_atomic(&missing, b"x").is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"{\"new\": true}");
-        let ui = UiState::default();
-        write_atomic(&path, &serde_json::to_vec_pretty(&ui).unwrap()).unwrap();
-        let (loaded, warning, _) = load_prefs_at(&path, true);
-        assert!(loaded.is_some() && warning.is_none());
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Given what the settings remember of the window, when the app's window is built, then it
-    /// opens at that size, zoomed if it was, where the system puts it; with nothing remembered it
-    /// opens at the usual size.
-    #[test]
-    fn the_window_opens_as_it_was() {
-        use lightcraft_ui_egui::window_place::{DEFAULT_SIZE, WindowPlace};
-        let fresh = as_remembered(egui::ViewportBuilder::default(), None);
-        assert_eq!((fresh.inner_size, fresh.position, fresh.maximized), (Some(egui::Vec2::from(DEFAULT_SIZE)), None, None));
-        let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }));
-        assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, Some(true)));
-        // (not asked to un-zoom: macOS would then resize a window that fills its screen)
-        let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
-        assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, None));
-    }
-
-    /// Given a window that rests at a size, when the settings are written and read again, then
-    /// they hold how it was. A window in the file that is not one (a hand edit, another version's)
-    /// reads as nothing remembered and costs no other setting; and a window resized just before
-    /// the app quits is remembered at that size.
-    #[test]
-    fn the_settings_keep_how_the_window_was() {
-        use lightcraft_ui_egui::window_place::{Seen, WindowPlace};
-        let d = dir("window");
-        let path = d.join("ui.json");
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-        app.ui.settings.library_path = "/pictures/library".into();
-        let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
-        writer.save(&app).unwrap();
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("\"window\""), "nothing to remember yet");
-        let window = WindowPlace { size: [1300.0, 800.0], zoomed: true };
-        app.ui.window = Some(window);
-        writer.save(&app).unwrap();
-        let (restored, warning, _) = load_prefs_at(&path, false);
-        assert_eq!((restored.unwrap().window, warning), (Some(window), None));
-
-        // a window that is no window: the file is read all the same, with its other settings
-        let text = std::fs::read_to_string(&path).unwrap();
-        for odd in [r#""window": {}"#, r#""window": "wide""#, r#""window": {"size": [1, 2, 3]}"#, r#""window": {"size": [null, 800.0]}"#] {
-            let start = text.find("\"window\"").unwrap();
-            let end = start + text[start..].find('}').unwrap() + 1;
-            std::fs::write(&path, format!("{}{odd}{}", &text[..start], &text[end..])).unwrap();
-            let (restored, warning, keep) = load_prefs_at(&path, true);
-            let restored = restored.unwrap_or_else(|| panic!("{odd}: {warning:?}"));
-            assert_eq!((restored.window, restored.settings.library_path.as_str(), warning, keep), (None, "/pictures/library", None, false), "{odd}");
-        }
-
-        // resized, and the app quits a moment later: the new size is what is written
-        let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
-        let rest = Some(WindowPlace { size: [1300.0, 800.0], zoomed: false });
-        writer.window.note(rest, &Seen { size: Some([1500.0, 900.0]), ..Default::default() }, 0.0);
-        writer.window_since = std::time::Instant::now().checked_sub(std::time::Duration::from_millis(400));
-        assert!(writer.window_since.is_some());
-        assert_eq!(writer.window_at_exit(rest), Some(WindowPlace { size: [1500.0, 900.0], zoomed: false }));
-        assert_eq!(PrefsWriter::default().window_at_exit(rest), rest, "a window that was never seen");
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Given the app's window at a size, when the settings writer looks at it frame after frame,
-    /// then it asks to be woken while the size has still to rest, remembers the size once it has,
-    /// and asks for nothing more. A window in the settings that is not one (a script set it) is
-    /// put right before it is gone by.
-    #[test]
-    fn the_writer_follows_the_window_from_frame_to_frame() {
-        use lightcraft_ui_egui::window_place::WindowPlace;
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-        let mut writer = PrefsWriter::default();
-        let ctx = egui::Context::default();
-        let pass = |look: &mut dyn FnMut(&egui::Context)| {
-            let raw =
-                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1300.0, 800.0))), ..Default::default() };
-            let mut out = ctx.run_ui(raw, |ui| look(ui.ctx()));
-            out.textures_delta.clear();
-            out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay)
-        };
-        // (egui's own first frames ask for another: let them pass)
-        for _ in 0..3 {
-            pass(&mut |_| {});
-        }
-        app.ui.window = Some(WindowPlace { size: [f32::NAN, 800.0], zoomed: true });
-        let asked = pass(&mut |ctx| writer.tick(&mut app, ctx));
-        assert_eq!(app.ui.window, None, "no window, and not yet at rest");
-        assert!(asked.is_some_and(|wait| wait <= std::time::Duration::from_secs(1)), "{asked:?}");
-        // a second later
-        writer.window_since = writer.window_since.and_then(|since| since.checked_sub(std::time::Duration::from_secs(1)));
-        pass(&mut |ctx| writer.tick(&mut app, ctx));
-        assert_eq!(app.ui.window, Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
-        let asked = pass(&mut |ctx| writer.tick(&mut app, ctx));
-        assert!(asked.is_none_or(|wait| wait > std::time::Duration::from_secs(3600)), "at rest and remembered: {asked:?}");
-    }
-
-    /// #1331: on macOS the process ends inside `on_exit`, before eframe would tear the window down.
-    /// The check runs in a child (this test binary again), since on macOS it ends the process.
-    #[test]
-    fn on_exit_ends_the_process_on_macos() {
-        if std::env::var_os("LIGHTCRAFT_TEST_ON_EXIT").is_some() {
-            let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-            let mut app = App(
-                app,
-                PrefsWriter::default(),
-                #[cfg(target_os = "macos")]
-                None,
-            );
-            println!("calling on_exit");
-            eframe::App::on_exit(&mut app, None);
-            println!("on_exit returned");
-            return;
-        }
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::on_exit_ends_the_process_on_macos", "--nocapture"])
-            .env("LIGHTCRAFT_TEST_ON_EXIT", "1")
-            .env("LIGHTCRAFT_NO_PREFS", "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(out.status.success(), "{stdout}");
-        assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
-        assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
-    }
-}
-
-#[cfg(test)]
-mod config_path_tests {
-    use super::*;
-
-    #[test]
-    fn config_override_keeps_panic_log_in_isolated_profile() {
-        let temp = std::path::PathBuf::from("temp");
-        assert_eq!(panic_log_path_with(|_| Some("isolated".into()), temp.clone()), std::path::PathBuf::from("isolated/lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| None, temp.clone()), temp.join("lightcraft-panics.log"));
-        assert_eq!(panic_log_path_with(|_| Some("".into()), temp.clone()), temp.join("lightcraft-panics.log"));
-    }
-}
+mod tests;
