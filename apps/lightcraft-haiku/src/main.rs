@@ -12,8 +12,30 @@ use lightcraft_haiku_host as host;
 #[path = "../../lightcraft/src/alloc_release.rs"]
 mod alloc_release;
 #[cfg(target_os = "haiku")]
-#[path = "../../lightcraft/src/common.rs"]
-mod common;
+mod desktop;
+#[cfg(target_os = "haiku")]
+#[path = "../../lightcraft/src/gpu_crash.rs"]
+#[allow(dead_code)] // the desktop window's parts
+mod gpu_crash;
+#[cfg(target_os = "haiku")]
+#[path = "../../lightcraft/src/prefs.rs"]
+#[allow(dead_code)] // the desktop window's parts
+mod prefs;
+/// What `gpu_crash` names of the desktop window's renderer: the native host draws its own window.
+#[cfg(target_os = "haiku")]
+#[allow(dead_code)]
+mod window_gpu {
+    pub(crate) struct Files;
+    impl Files {
+        pub(crate) fn new(_dir: Option<std::path::PathBuf>) -> Self {
+            Files
+        }
+    }
+}
+#[cfg(target_os = "haiku")]
+use lightcraft_ui_egui::panels::library_problem::{Launch, LibraryProblem};
+#[cfg(target_os = "haiku")]
+use lightcraft_ui_egui::{LightcraftApp, UiState};
 #[cfg(target_os = "haiku")]
 #[path = "../../lightcraft/src/control_server.rs"]
 mod control_server;
@@ -47,8 +69,9 @@ fn guard<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Stri
 }
 #[cfg(target_os = "haiku")]
 fn native_main() -> Result<(), String> {
-    use common::*;
-    use lightcraft_ui_egui::LightcraftApp;
+    use desktop::*;
+    use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path};
+    use prefs::{PrefsWriter, config_dir, load_prefs, prefs_path};
     host::export_vulkan_driver();
     host::export_locale();
     let logger = logging::install();
@@ -95,14 +118,15 @@ fn native_main() -> Result<(), String> {
     if let Some(ui) = &prefs {
         lightcraft_ui_egui::i18n::set_language(ui.language);
     }
-    library_dir = library_dir.or_else(|| {
-        prefs
-            .as_ref()
-            .map(|u| u.settings.library_path.clone())
-            .filter(|p| !p.is_empty() && std::env::var_os("LIGHTCRAFT_LIBRARY").is_none())
-            .map(Into::into)
-    });
-    library_dir = library_dir.or_else(lightcraft_engine::library::default_dir);
+    // --library, else LIGHTCRAFT_LIBRARY, else the recent libraries if Settings say Ask me, else
+    // the library last opened, else the default location (as the desktop app)
+    let launch = lightcraft_ui_egui::panels::library_problem::launch_plan(
+        in_memory,
+        library_dir,
+        std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into),
+        prefs.as_ref().map(|u| &u.settings),
+        lightcraft_engine::library::default_dir(),
+    );
     let gpu_crash = gpu_crash_check(in_memory).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
     let window_recovery =
         window_recovery::WindowRecovery::new(config_dir().filter(|_| std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()), !in_memory);
@@ -134,11 +158,15 @@ fn native_main() -> Result<(), String> {
             let result = guard("Interface", || {
                 let ctx = egui::Context::default();
                 ctx.set_embed_viewports(true);
-                let (session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+                let (session, mut problem) = open_session(in_memory, &launch, seed_demo && files.is_empty());
                 let mut app = LightcraftApp::new(session.with_default_sam3_model(), services::native(log_file.as_deref()));
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
+                if launch == Launch::Ask {
+                    problem = Some(LibraryProblem::choose_later(&app.ui.settings));
+                }
+                app.alt_asks_for_library = matches!(launch, Launch::Open { alt_asks: true, .. });
                 app.integrated_titlebar = false;
                 app.gpu_notice = true;
                 app.notices.extend(prefs_warning);

@@ -1,5 +1,5 @@
 name lightcraft
-version 0.9.1~airos1-3
+version 0.15.0~airos1-1
 architecture x86_64
 summary "Photo library and non-destructive RAW developer"
 description "LightCraft for air/OS: the full Rust photo library and non-destructive RAW developer with native windows, file panels and clipboard; Vulkan photo processing and UI rendering on supported hardware, with a CPU fallback."
@@ -9,8 +9,8 @@ copyrights { "2026 LightCraft contributors" }
 licenses { "MIT" "Apache v2" }
 urls { "https://github.com/jmgasper/lightcraft" }
 provides {
-    lightcraft = 0.9.1
-    app:LightCraft = 0.9.1
+    lightcraft = 0.15.0
+    app:LightCraft = 0.15.0
 }
 requires {
     haiku >= r1~beta6

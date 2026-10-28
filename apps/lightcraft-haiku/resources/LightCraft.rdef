@@ -3,8 +3,8 @@ resource app_signature "application/x-vnd.jmgasper-LightCraft";
 resource(2, "BEOS:TYPE") #'MIMS' "application/x-vnd.Be-elfexecutable";
 resource app_flags B_MULTIPLE_LAUNCH;
 resource app_version {
-    major = 0, middle = 9, minor = 1, variety = B_APPV_DEVELOPMENT, internal = 2,
-    short_info = "LightCraft 0.9.1",
+    major = 0, middle = 15, minor = 0, variety = B_APPV_DEVELOPMENT, internal = 1,
+    short_info = "LightCraft 0.15.0",
     long_info = "LightCraft photo library and RAW developer for air/OS (MIT or Apache-2.0)."
 };
 resource vector_icon { import "LightCraft.hvif" };

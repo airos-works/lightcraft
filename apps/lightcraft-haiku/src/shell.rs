@@ -19,7 +19,7 @@ pub struct Shell {
     raster: Rasterizer,
     gpu: Option<crate::gpu::Gpu>,
     gpu_health: Option<crate::gpu::Health>,
-    writer: crate::common::PrefsWriter,
+    writer: crate::prefs::PrefsWriter,
     window_recovery: crate::window_recovery::WindowRecovery,
     start: Instant,
     /// egui's points to device pixels, as of the last frame, and the system's own: the interface
@@ -40,7 +40,7 @@ pub struct Shell {
     repaint_at: Option<Instant>,
     /// When other threads asked for one (`request_repaint` from a worker).
     woken_for: Arc<Mutex<Option<Instant>>>,
-    screenshots: Vec<egui::UserData>,
+    screenshots: Vec<egui::ScreenshotCallback>,
     title: String,
 }
 
@@ -94,7 +94,7 @@ fn button(bit: i32) -> Option<PointerButton> {
 impl Shell {
     pub fn new(
         mut app: LightcraftApp,
-        writer: crate::common::PrefsWriter,
+        writer: crate::prefs::PrefsWriter,
         ctx: egui::Context,
         ui_scale: f32,
         window_recovery: crate::window_recovery::WindowRecovery,
@@ -262,6 +262,8 @@ impl Shell {
                     unit: egui::MouseWheelUnit::Line,
                     delta: vec2(-ev.dx, -ev.dy),
                     phase: egui::TouchPhase::Move,
+                    // B_MOUSE_WHEEL_CHANGED doesn't say whether a wheel or a touchpad sent it
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: self.modifiers,
                 });
             }
@@ -280,7 +282,7 @@ impl Shell {
             // window: import through the same full library path as the desktop app.
             kind::OPEN_FILES | kind::DROPPED_FILES => {
                 let paths = text.lines().filter(|p| !p.is_empty()).map(str::to_owned).collect::<Vec<_>>();
-                let (paths, notices) = crate::common::launch_imports(&paths);
+                let (paths, notices) = crate::desktop::launch_imports(&paths);
                 self.app.notices.extend(notices);
                 if let Some(problem) = self.app.library_problem.as_mut() {
                     problem.pending_import.extend(paths);
@@ -390,8 +392,8 @@ impl Shell {
             ..Default::default()
         };
         let mut raw = raw;
-        self.app.raw_input_hook(&mut raw);
         let ctx = self.ctx.clone();
+        self.app.raw_input_hook(&ctx, &mut raw);
         let t0 = Instant::now();
         let mut out = ctx.run_ui(raw, |ui| {
             let ctx = ui.ctx().clone();
@@ -410,6 +412,8 @@ impl Shell {
                     }
                 }
                 egui::OutputCommand::CopyImage(img) => copy_image(img),
+                // Haiku has no PRIMARY selection to put it in
+                egui::OutputCommand::TextSelectionSettled(_) => {}
                 egui::OutputCommand::OpenUrl(u) => {
                     if !host::open_url(&u.url) {
                         log::warn!(target: "lightcraft_haiku", "couldn't open {}", u.url);
@@ -484,9 +488,9 @@ impl Shell {
         // Applied: epaint checks (in debug builds) that no texture update is dropped unhandled.
         out.textures_delta.clear();
         if !self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some()) {
-            for user_data in std::mem::take(&mut self.screenshots) {
-                let image = Arc::new(self.gpu.as_ref().map_or_else(|| self.raster.image(), |g| g.image()));
-                self.events.push(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data, image });
+            for callback in std::mem::take(&mut self.screenshots) {
+                // egui 0.37 answers a screenshot request through its one-shot callback
+                callback.complete(Arc::new(self.gpu.as_ref().map_or_else(|| self.raster.image(), |g| g.image())));
                 delay = Duration::ZERO;
             }
         } else {
@@ -520,7 +524,7 @@ impl Shell {
             ViewportCommand::Maximized(true) => host::window_command(WindowCommand::Zoom),
             ViewportCommand::Fullscreen(on) => host::window_command(WindowCommand::Fullscreen(*on)),
             ViewportCommand::Focus => host::window_command(WindowCommand::Activate),
-            ViewportCommand::Screenshot(data) => self.screenshots.push(data.clone()),
+            ViewportCommand::Screenshot(callback) => self.screenshots.push(callback.clone()),
             ViewportCommand::RequestCut => self.events.push(Event::Cut),
             ViewportCommand::RequestCopy => self.events.push(Event::Copy),
             ViewportCommand::RequestPaste => {

@@ -38,6 +38,8 @@ while IFS= read -r license; do
     cp "$license" "$DOCS/licenses/craft-fonts/$relative"
 done < <(rg --files "$CRAFT_FONTS_DIR" | rg '(^|/)(LICENSE[^/]*|OFL[^/]*|COPYING[^/]*)$')
 mkdir -p "$DOCS/licenses/epaint_default_fonts"
-cp "$CARGO_HOME"/registry/src/*/epaint_default_fonts-0.36.2/fonts/*.txt "$DOCS/licenses/epaint_default_fonts/"
+# egui's default fonts come from the storytold/egui commit patched in Cargo.toml (a git checkout).
+EGUI_REV=$(sed -n 's/^epaint_default_fonts = .*rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+cp "$CARGO_HOME"/git/checkouts/egui-*/"${EGUI_REV:0:7}"/crates/epaint_default_fonts/fonts/*.txt "$DOCS/licenses/epaint_default_fonts/"
 ln -s ../../../../apps/LightCraft "$STAGE/data/deskbar/menu/Applications/LightCraft"
 "$TOOLS/package/package" create -C "$STAGE" "$OUT/lightcraft-$VERSION-x86_64.hpkg"

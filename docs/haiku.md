@@ -1,7 +1,7 @@
 # LightCraft for air/OS
 
-This is the independently maintained `jmgasper/lightcraft` fork of LightCraft
-0.9.1. The upstream project does not maintain this port.
+This is the independently maintained `airos-works/lightcraft` fork of LightCraft
+0.15.0. The upstream project does not maintain this port.
 
 The native application retains the full library, non-destructive developer,
 import/export, presets, masks, history and external-editor workflows. The shared
@@ -18,7 +18,7 @@ for another installation. Rust needs `rust-src` because Haiku is a tier-3 target
 All build output stays under this checkout.
 
 Clone `https://github.com/storytold/craft-fonts` beside this repository and check
-out `3d9ab3a132ed0eff457e424226a435a901da30d3`, the upstream release's pinned
+out `b076417b5880bd4154bd22f00695b1d28c6bea83`, the upstream release's pinned
 font input. Set `CRAFT_FONTS_DIR` if it lives elsewhere. These fonts are required
 by the native release build and their OFL licenses are bundled in the package.
 
@@ -148,3 +148,16 @@ rendered on Haiku with `BIconUtils::GetVectorIcon`; review at 16, 32, 64 and 128
 on light and dark backgrounds before changing the drawing.
 
 Package version `0.9.1~airos1-3` includes this icon update.
+
+## Upstream 0.15.0 merge (2026-10-29)
+
+The port follows upstream LightCraft 0.15.0 (egui 0.37 from storytold's egui fork,
+still wgpu 30.0.1, so the vendored Haiku cfg patches apply unchanged). The native
+host now uses the desktop app's own `prefs.rs` and `gpu_crash.rs` modules; the
+start-up helpers that need eframe or rfd there are mirrored in
+`apps/lightcraft-haiku/src/desktop.rs`. The library chooser at launch (Settings ▸
+General ▸ At launch: Ask me, or Alt held), print templates and the model-folder
+button are wired to native file panels and Tracker. The in-app update checker is
+not started; air/OS updates come from the package. The release build uses
+craft-fonts `b076417b5880bd4154bd22f00695b1d28c6bea83`, upstream's release pin.
+Package version `0.15.0~airos1-1` is the first with this merge.

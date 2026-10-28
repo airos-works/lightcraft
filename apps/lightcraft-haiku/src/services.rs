@@ -93,6 +93,16 @@ fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
     host::type_file(std::path::Path::new(path));
     Ok(())
 }
+/// [`write`] that never replaces an existing file (screenshots to a new destination).
+fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
+    lightcraft_engine::export::write_file_new(path, bytes)?;
+    host::type_file(std::path::Path::new(path));
+    Ok(())
+}
+/// Shows a folder in Tracker.
+fn open_folder(path: &str) -> Result<(), String> {
+    if host::open_url(path) { Ok(()) } else { Err("Could not open the folder in Tracker".into()) }
+}
 pub fn native(log_file: Option<&std::path::Path>) -> Services {
     Services {
         picker: Some(Box::new(picker)),
@@ -109,9 +119,12 @@ pub fn native(log_file: Option<&std::path::Path>) -> Services {
         save_curve_preset_file: Some(save("Export Point Curve", &["lccurve"])),
         pick_slideshow_templates: Some(files("Import Slideshow Templates", &["json"])),
         save_slideshow_template: Some(save("Export Slideshow Template", &["json"])),
+        pick_print_templates: Some(files("Import Print Templates", &[lightcraft_engine::print::template::FILE_EXT])),
+        save_print_template: Some(save("Export Print Template", &[lightcraft_engine::print::template::FILE_EXT])),
         pick_lightroom_catalog: Some(Box::new(|| pick_sync(PickRequest::file("Import Lightroom Catalog", "Catalog", &["lrcat"])).into_iter().next())),
         pick_folder: Some(Box::new(|| pick_sync(PickRequest::folder("Choose Folder")).into_iter().next())),
         write: Some(Box::new(write)),
+        write_new: Some(Box::new(write_new)),
         write_shared: Some(std::sync::Arc::new(write)),
         png: Some(Box::new(|img| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
@@ -120,7 +133,7 @@ pub fn native(log_file: Option<&std::path::Path>) -> Services {
         reveal: Some(Box::new(|path| {
             let path = std::path::Path::new(path);
             let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
-            if host::open_url(&dir.to_string_lossy()) { Ok(()) } else { Err("Could not open the folder in Tracker".into()) }
+            open_folder(&dir.to_string_lossy())
         })),
         open_url: Some(Box::new(|url| {
             if !url.starts_with("https://") {
