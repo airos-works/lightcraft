@@ -81,7 +81,7 @@ pub(crate) use caches::key_of;
 pub use caches::{FilterValues, LibraryCounts, RulesView};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "haiku"))]
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,

@@ -99,9 +99,9 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
     host::type_file(std::path::Path::new(path));
     Ok(())
 }
-/// Shows a folder in Tracker.
-fn open_folder(path: &str) -> Result<(), String> {
-    if host::open_url(path) { Ok(()) } else { Err("Could not open the folder in Tracker".into()) }
+/// Shows a file selected in its folder, or a folder, in Tracker.
+fn reveal(path: &str) -> Result<(), String> {
+    if host::reveal(std::path::Path::new(path)) { Ok(()) } else { Err(format!("Could not show {path} in Tracker")) }
 }
 pub fn native(log_file: Option<&std::path::Path>) -> Services {
     Services {
@@ -130,11 +130,9 @@ pub fn native(log_file: Option<&std::path::Path>) -> Services {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
         log_file: log_file.map(|p| p.display().to_string()),
-        reveal: Some(Box::new(|path| {
-            let path = std::path::Path::new(path);
-            let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
-            open_folder(&dir.to_string_lossy())
-        })),
+        reveal: Some(Box::new(reveal)),
+        // The SAM 3 model folder's Show in File Manager (a worker calls it): the folder opens.
+        open_model_folder: Some(std::sync::Arc::new(reveal)),
         open_url: Some(Box::new(|url| {
             if !url.starts_with("https://") {
                 return Err("Only HTTPS links are opened".into());

@@ -21,6 +21,11 @@ pub struct Shell {
     gpu_health: Option<crate::gpu::Health>,
     writer: crate::prefs::PrefsWriter,
     window_recovery: crate::window_recovery::WindowRecovery,
+    /// The desktop app's GPU-lost marker (`gpu_crash`, issue #1337), until it is written; `None`
+    /// for `--memory` and `LIGHTCRAFT_NO_PREFS`. See [`Self::record_gpu_lost`].
+    gpu_lost: Option<std::path::PathBuf>,
+    /// The window's GPU device failed during this session.
+    window_lost: bool,
     start: Instant,
     /// egui's points to device pixels, as of the last frame, and the system's own: the interface
     /// scale (the system font against 12 pt) times the desktop's density.
@@ -100,6 +105,7 @@ impl Shell {
         ctx: egui::Context,
         ui_scale: f32,
         window_recovery: crate::window_recovery::WindowRecovery,
+        gpu_lost: Option<std::path::PathBuf>,
         safe_start: bool,
     ) -> Result<Self, String> {
         let mode = std::env::var("LIGHTCRAFT_RENDERER").unwrap_or_else(|_| "auto".into());
@@ -147,6 +153,8 @@ impl Shell {
             raster: Rasterizer::new(),
             writer,
             window_recovery,
+            gpu_lost,
+            window_lost: false,
             start: Instant::now(),
             ppp: native_ppp,
             native_ppp,
@@ -443,6 +451,8 @@ impl Shell {
             log::warn!(target: "lightcraft_haiku", "{fault}; switching native host to CPU");
             self.app.notices.push(format!("{fault}. The window now renders on the CPU."));
             self.window_recovery.record(&fault);
+            self.window_lost = true;
+            self.record_gpu_lost();
             self.gpu = None;
             self.gpu_health = None;
             self.app.perf.host_renderer = Some("CPU bitmap");
@@ -626,8 +636,28 @@ impl Shell {
         }
     }
 
+    /// Where the desktop app stops after the graphics driver reset the GPU (its window renderer
+    /// panics on the lost device) and records it with `record_gpu_lost`, the window here falls
+    /// back to the CPU and goes on. A reset takes the photo pipeline's device too: once both the
+    /// window's device failed and the photo pipeline stopped after a GPU failure, the same marker
+    /// is written, so the next launch renders photos on the CPU and says why, as the desktop
+    /// app's does (`gpu_lost_check_at` removes it then). The photo pipeline only notices at its
+    /// next render, so this is asked again at quit.
+    fn record_gpu_lost(&mut self) {
+        if !self.window_lost {
+            return;
+        }
+        if let Some(reason) = crate::gpu_crash::gpu_lost_reason()
+            && let Some(marker) = self.gpu_lost.take()
+        {
+            log::warn!(target: "lightcraft_haiku", "the GPU was lost ({reason}); the next launch renders photos on the CPU");
+            crate::gpu_crash::record_gpu_lost(Some(&marker), &reason);
+        }
+    }
+
     /// What quitting does besides closing the window (`on_exit` in the desktop app).
     pub fn finish(&mut self) {
+        self.record_gpu_lost();
         self.app.ui.window = self.writer.window_at_exit(self.app.ui.window);
         if let Err(e) = self.writer.save(&self.app) {
             log::error!("{e}");

@@ -27,8 +27,8 @@ pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 /// Open several files with one start of an application (`app` as for [`OpenWithFn`]).
 pub type OpenAllWithFn = Box<dyn FnMut(&[String], &str) -> Result<(), String>>;
 
-/// Linux model-folder work: wait for the default opener on a background task.
-#[cfg(target_os = "linux")]
+/// Linux (and air/OS) model-folder work: wait for the default opener on a background task.
+#[cfg(any(target_os = "linux", target_os = "haiku"))]
 pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 /// The ICC profile of the screen showing the window, as the system colour-manages it (`None`:
@@ -115,8 +115,8 @@ pub struct Services {
     /// Open several files with one start of the editor (Open Original; desktop only): an editor
     /// that keeps one window takes them all. None = [`Services::open_with`] for each.
     pub open_all_with: Option<OpenAllWithFn>,
-    /// Optional worker-safe model-folder opener alongside `open_with` (Linux desktop only).
-    #[cfg(target_os = "linux")]
+    /// Optional worker-safe model-folder opener alongside `open_with` (Linux desktop and air/OS only).
+    #[cfg(any(target_os = "linux", target_os = "haiku"))]
     pub open_model_folder: Option<OpenModelFolderFn>,
     /// Checked before Edit In renders a copy, so a missing editor leaves no copy behind (none =
     /// assume it can).

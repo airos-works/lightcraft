@@ -96,6 +96,8 @@ unsafe extern "C" {
     fn lc_clipboard_set_picture(mime: *const c_char, data: *const c_void, len: usize) -> i32;
     fn lc_host_file_panel(id: i32, save: i32, name: *const c_char, extensions: *const c_char, title: *const c_char) -> i32;
     fn lc_host_open_url(url: *const c_char) -> i32;
+    fn lc_host_reveal(path: *const c_char) -> i32;
+    fn lc_host_volumes() -> *mut c_char;
     fn lc_host_alert(title: *const c_char, text: *const c_char);
     fn lc_host_type_file(path: *const c_char) -> i32;
     fn lc_host_claim_types(signature: *const c_char, types: *const c_char) -> i32;
@@ -475,6 +477,22 @@ pub fn open_url(url: &str) -> bool {
     let u = c(url);
     // SAFETY: a valid C string.
     unsafe { lc_host_open_url(u.as_ptr()) == 0 }
+}
+
+/// Shows `path` in Tracker: a folder opens, a file is selected in its folder.
+pub fn reveal(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(p) = CString::new(path.as_os_str().as_bytes()) else { return false };
+    // SAFETY: a valid C string.
+    unsafe { lc_host_reveal(p.as_ptr()) == 0 }
+}
+
+/// The mount points of the local, persistent volumes other than the boot volume (where a camera
+/// or a memory card appears; air/OS mounts volumes at the root, beside network shares).
+pub fn volumes() -> Vec<std::path::PathBuf> {
+    // SAFETY: the host returns a malloc'd C string (or null).
+    let list = take_string(unsafe { lc_host_volumes() });
+    list.lines().filter(|l| !l.is_empty()).map(std::path::PathBuf::from).collect()
 }
 
 /// Sets a saved file's MIME type (`BEOS:TYPE`) from its extension and content, if it has none.

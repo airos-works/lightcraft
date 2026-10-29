@@ -231,3 +231,38 @@ library; while the library chooser is open they wait for the chosen library),
 and its window comes to the front. A launch without files only brings the
 window up. A test copy that must run beside the installed one runs from a file
 of its own.
+
+## Tracker, GPU loss, HDR and cameras
+
+- Show in Folder, Help ▸ Open Log Folder and the SAM 3 dialog's Show in File
+  Manager open Tracker through `lc_host_reveal`: a folder opens in its own
+  window, a file is selected in its folder's window (Tracker's
+  `nodeRefToSelect`). The model folder opens on a worker, as on Linux.
+- When the window's Vulkan device is lost, the window goes on with the CPU
+  renderer and `window-init.marker` makes the next launch start on the CPU, as
+  before. If the photo pipeline has also stopped after the GPU failure (a
+  driver reset takes both devices), the desktop app's `gpu-lost.marker`
+  (`gpu_crash::record_gpu_lost`) is written too, at that moment or at quit, and
+  the next launch turns GPU photo rendering off and says why; it removes the
+  marker, a `--memory` run leaves it.
+- HDR: the log says `display: SDR`. app_server composes the screen in 8-bit
+  sRGB (`B_RGB32` frame buffers; `B_RGB30` is 10-bit SDR), and neither
+  `BScreen`/`display_mode` nor the graphics drivers have an HDR transfer
+  function, colour primaries or HDR metadata (the EDID parser reads a
+  display's HDR block, nothing uses it), so there is no HDR output to report.
+- Cameras and memory cards: File ▸ Import from Device lists the mounted
+  volumes with a `DCIM` folder. air/OS mounts volumes at the root, beside
+  network shares and virtual file systems, so the host lists the local,
+  persistent volumes other than the boot volume (`lc_host_volumes`,
+  `BVolumeRoster`) for the engine's scan (`devices::set_volume_lister`);
+  `LIGHTCRAFT_DEVICE_ROOTS` still replaces it. Settings ▸ Import ▸ Cameras and
+  Cards works the same way.
+- Cameras that don't mount as a disk (PTP/MTP) and tethered capture: upstream
+  LightCraft has neither on any platform (`docs/hardware-parity.md`), so there
+  is nothing to port. The way upstream offers for tethering is Settings ▸
+  Import ▸ Auto Import's watched folder, which works here as on the other
+  desktops. HaikuPorts' gphoto2 2.5.27 (libgphoto2 with its PTP driver, over
+  libusb and air/OS's `usb_raw`) runs on the X399 and lists the USB devices,
+  so `gphoto2 --capture-tethered --filename "$HOME/Pictures/Tethered/%f.%C"`
+  into the watched folder is the expected route; it hasn't been tried with a
+  camera.

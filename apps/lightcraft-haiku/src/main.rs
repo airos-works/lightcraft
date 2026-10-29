@@ -151,6 +151,13 @@ fn native_main() -> Result<(), String> {
     if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(workers).build_global() {
         log::warn!("Worker pool: {e}");
     }
+    // Cameras and memory cards (File ▸ Import from Device): the system tells local volumes from
+    // the network shares mounted beside them at the root.
+    lightcraft_engine::devices::set_volume_lister(host::volumes);
+    // As the desktop app's hdr_display::report: app_server composes the screen in 8-bit sRGB
+    // (B_RGB32 frame buffers; the drivers set no HDR transfer function or metadata), and the
+    // window renderer draws into it, so the window is SDR.
+    log::info!(target: "lightcraft_haiku", "display: SDR (air/OS's app_server and graphics drivers have no HDR output)");
     let scale = host::ui_scale();
     let window = prefs.as_ref().and_then(|u| u.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
     let size = window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size);
@@ -213,7 +220,8 @@ fn native_main() -> Result<(), String> {
                     }
                     app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
                 }
-                let mut shell = shell::Shell::new(app, writer, ctx, scale, window_recovery, safe_start)?;
+                let gpu_lost = gpu_lost_marker_path().filter(|_| !in_memory);
+                let mut shell = shell::Shell::new(app, writer, ctx, scale, window_recovery, gpu_lost, safe_start)?;
                 shell.run();
                 shell.finish();
                 Ok(())

@@ -16,7 +16,7 @@ pub(crate) fn show_model_folder(app: &mut LightcraftApp) -> Result<serde_json::V
     let open = app.services.open_with.as_mut().ok_or("opening model folders is not available here")?;
     // Create only after the host action is available. Existing model files are left alone.
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "haiku"))]
     if let Some(open_folder) = app.services.open_model_folder.clone() {
         let path = path.to_string();
         let folder = path.clone();

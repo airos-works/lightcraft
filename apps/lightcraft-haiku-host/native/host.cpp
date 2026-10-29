@@ -44,6 +44,8 @@
 #include <TranslatorRoster.h>
 #include <Url.h>
 #include <View.h>
+#include <Volume.h>
+#include <VolumeRoster.h>
 #include <Window.h>
 
 #include <dlfcn.h>
@@ -1457,6 +1459,68 @@ lc_host_open_url(const char* url)
 }
 
 
+
+
+// Shows a path in Tracker: a folder in a window of its own, a file selected in
+// its folder's window (as Tracker's own "Open parent" does). Tracker is
+// started when it doesn't run.
+int32_t
+lc_host_reveal(const char* path)
+{
+	BEntry entry(path, true);
+	entry_ref ref;
+	if (!entry.Exists() || entry.GetRef(&ref) != B_OK)
+		return -1;
+	BMessage message(B_REFS_RECEIVED);
+	if (entry.IsDirectory()) {
+		message.AddRef("refs", &ref);
+	} else {
+		BEntry parent;
+		entry_ref parentRef;
+		node_ref node;
+		if (entry.GetParent(&parent) != B_OK
+			|| parent.GetRef(&parentRef) != B_OK
+			|| entry.GetNodeRef(&node) != B_OK)
+			return -1;
+		message.AddRef("refs", &parentRef);
+		message.AddData("nodeRefToSelect", B_RAW_TYPE, &node, sizeof(node));
+	}
+	static const char* kTracker = "application/x-vnd.Be-TRAK";
+	BMessenger tracker(kTracker);
+	if (tracker.IsValid())
+		return tracker.SendMessage(&message) == B_OK ? 0 : -1;
+	return be_roster->Launch(kTracker, &message) == B_OK ? 0 : -1;
+}
+
+
+// The mount points of the volumes a camera or a memory card can be (one per
+// line, malloc'd): local, persistent volumes other than the boot volume.
+// air/OS mounts them at the root, beside network shares (userlandfs) and the
+// virtual file systems, which are left out.
+char*
+lc_host_volumes()
+{
+	BVolumeRoster roster;
+	BVolume boot;
+	roster.GetBootVolume(&boot);
+	BVolume volume;
+	std::string paths;
+	while (roster.GetNextVolume(&volume) == B_OK) {
+		if (volume == boot || !volume.IsPersistent() || volume.IsShared())
+			continue;
+		BDirectory root;
+		BEntry entry;
+		BPath path;
+		if (volume.GetRootDirectory(&root) != B_OK
+			|| root.GetEntry(&entry) != B_OK
+			|| entry.GetPath(&path) != B_OK)
+			continue;
+		if (!paths.empty())
+			paths += '\n';
+		paths += path.Path();
+	}
+	return strdup(paths.c_str());
+}
 
 
 // Makes the application the preferred one for the types (one per line) that

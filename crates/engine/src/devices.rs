@@ -48,6 +48,18 @@ fn mount_parents() -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Mounted volumes the host lists itself, where they aren't the children of a folder: air/OS
+/// mounts every volume at the root, beside network shares and virtual file systems, which only
+/// the system can tell apart. See [`set_volume_lister`].
+type VolumeLister = dyn Fn() -> Vec<std::path::PathBuf> + Send + Sync;
+static VOLUMES: std::sync::OnceLock<Box<VolumeLister>> = std::sync::OnceLock::new();
+
+/// Add the volumes `f` lists (mount points) to every scan, unless `LIGHTCRAFT_DEVICE_ROOTS` is
+/// set. Called by a host once, at start; later calls are ignored.
+pub fn set_volume_lister(f: impl Fn() -> Vec<std::path::PathBuf> + Send + Sync + 'static) {
+    let _ = VOLUMES.set(Box::new(f));
+}
+
 type Scanner = dyn Fn() -> Vec<Device> + Send + Sync;
 type Notify = dyn Fn() + Send + Sync;
 
@@ -180,6 +192,9 @@ fn scan() -> Vec<Device> {
     let mut extra = Vec::new();
     if cfg!(windows) && std::env::var_os("LIGHTCRAFT_DEVICE_ROOTS").is_none() {
         extra.extend((b'D'..=b'Z').map(|c| std::path::PathBuf::from(format!("{}:\\", c as char))));
+    }
+    if let Some(list) = VOLUMES.get().filter(|_| std::env::var_os("LIGHTCRAFT_DEVICE_ROOTS").is_none()) {
+        extra.extend(list());
     }
     devices_in(&mount_parents(), extra)
 }
