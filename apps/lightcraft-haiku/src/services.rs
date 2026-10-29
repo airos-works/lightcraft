@@ -103,6 +103,27 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn reveal(path: &str) -> Result<(), String> {
     if host::reveal(std::path::Path::new(path)) { Ok(()) } else { Err(format!("Could not show {path} in Tracker")) }
 }
+/// Settings ▸ Display ▸ Choose Profile…, starting in the monitor profiles folder (made so it can
+/// be found, as the screen profile's first read does).
+fn pick_display_profile() -> Vec<String> {
+    if let Some(dir) = crate::displays::profiles_dir() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let title = "Choose Monitor Profile";
+    let mut req = PickRequest::files(Some(lightcraft_ui_egui::i18n::tr(title).into()), title, &["icc", "icm"]);
+    // An Open panel's `file_name` is the folder it starts in.
+    req.file_name = crate::prefs::display_profile_dir().map(|d| d.to_string_lossy().into_owned());
+    pick_sync(req)
+}
+/// The profile of the screen showing the window (no screen keeps one on air/OS: the user's file
+/// in `~/config/settings/ColorProfiles` named after the monitor, see `displays.rs`).
+fn screen_profile() -> lightcraft_ui_egui::ScreenProfileFn {
+    let mut reader = crate::displays::ScreenProfile::new(crate::displays::profiles_dir());
+    Box::new(move || {
+        let w = host::window_info().inner.map(f64::from);
+        reader.read(&host::displays(), w)
+    })
+}
 pub fn native(log_file: Option<&std::path::Path>) -> Services {
     Services {
         picker: Some(Box::new(picker)),
@@ -111,7 +132,8 @@ pub fn native(log_file: Option<&std::path::Path>) -> Services {
         pick_model_file: Some(files("Choose Face Model", &["onnx"])),
         pick_preset_files: Some(files("Import Presets", lightcraft_ui_egui::pick::PRESET_EXTENSIONS)),
         pick_tracklog: Some(files("Import GPS Tracklog", &["gpx"])),
-        pick_display_profile: Some(files("Choose Monitor Profile", &["icc", "icm"])),
+        pick_display_profile: Some(Box::new(pick_display_profile)),
+        screen_profile: Some(screen_profile()),
         save_preset_file: Some(save("Export Presets", &["lcpreset"])),
         pick_keyword_list: Some(files("Import Keywords", &["txt", "utf8"])),
         save_keyword_list: Some(save("Export Keywords", &["txt"])),

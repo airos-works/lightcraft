@@ -3,6 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(not(target_os = "haiku"), allow(dead_code))]
 mod damage;
+mod displays;
 mod frame_cache;
 mod keys;
 mod raster;

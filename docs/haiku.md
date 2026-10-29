@@ -266,3 +266,25 @@ of its own.
   so `gphoto2 --capture-tethered --filename "$HOME/Pictures/Tethered/%f.%C"`
   into the watched folder is the expected route; it hasn't been tried with a
   camera.
+
+## Monitor profile
+
+Neither Haiku nor air/OS keeps a colour profile for a screen (app_server has no
+colour management, the Screen preferences none either), so a monitor's profile
+is a file the user puts in `~/config/settings/ColorProfiles/`, the folder
+PhotoCraft reads too (made at the first read). The first that exists is used,
+letter case and `.icc`/`.icm` aside:
+
+1. `<monitor name> <serial number>.icc`, for one of two identical monitors;
+2. `<monitor name>.icc`, the name in the Screen preferences (`DELL P2415Q.icc`);
+3. `<connector>.icc` (`DP-2.icc`), for a monitor without EDID;
+4. `default.icc`.
+
+While Settings ▸ Display has no profile chosen, previews go through the profile
+of the monitor showing most of the window (`Services::screen_profile`, read
+about once a second, so moving the window to another monitor is followed); the
+settings then offer Use Screen Profile. The monitors come from air/OS's display
+layout (`lc_host_displays`: connector, EDID name, vendor, serial number, frame),
+or `BScreen::GetMonitorInfo` on plain Haiku. Choose Profile… starts in
+`ColorProfiles` (`display_profile_dir`, which also knows
+`~/config/non-packaged/data/color/icc` and `/boot/system/data/color/icc`).

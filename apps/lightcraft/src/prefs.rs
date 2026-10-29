@@ -7,6 +7,10 @@ pub(crate) fn display_profile_dir() -> Option<std::path::PathBuf> {
     let user = |rel: &str| home.as_ref().map(|h| h.join(rel));
     let candidates: Vec<Option<std::path::PathBuf>> = if cfg!(target_os = "macos") {
         vec![user("Library/ColorSync/Profiles"), Some("/Library/ColorSync/Profiles".into())]
+    } else if cfg!(target_os = "haiku") {
+        // air/OS: the native host's monitor profiles (apps/lightcraft-haiku/src/displays.rs), then
+        // where the user's and the packages' shared data go
+        vec![user("config/settings/ColorProfiles"), user("config/non-packaged/data/color/icc"), Some("/boot/system/data/color/icc".into())]
     } else if cfg!(windows) {
         let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
         vec![Some(root.join("System32").join("spool").join("drivers").join("color"))]

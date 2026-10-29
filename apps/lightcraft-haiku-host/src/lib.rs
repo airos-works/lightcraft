@@ -98,6 +98,7 @@ unsafe extern "C" {
     fn lc_host_open_url(url: *const c_char) -> i32;
     fn lc_host_reveal(path: *const c_char) -> i32;
     fn lc_host_volumes() -> *mut c_char;
+    fn lc_host_displays() -> *mut c_char;
     fn lc_host_alert(title: *const c_char, text: *const c_char);
     fn lc_host_type_file(path: *const c_char) -> i32;
     fn lc_host_claim_types(signature: *const c_char, types: *const c_char) -> i32;
@@ -485,6 +486,13 @@ pub fn reveal(path: &std::path::Path) -> bool {
     let Ok(p) = CString::new(path.as_os_str().as_bytes()) else { return false };
     // SAFETY: a valid C string.
     unsafe { lc_host_reveal(p.as_ptr()) == 0 }
+}
+
+/// The displays, one per line: id, frame (left, top, right, bottom in screen coordinates), primary
+/// (0/1), connector, monitor name, vendor, serial number, tab-separated.
+pub fn displays() -> String {
+    // SAFETY: the host returns a malloc'd C string (or null).
+    take_string(unsafe { lc_host_displays() })
 }
 
 /// The mount points of the local, persistent volumes other than the boot volume (where a camera

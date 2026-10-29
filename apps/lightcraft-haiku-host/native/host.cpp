@@ -1461,6 +1461,71 @@ lc_host_open_url(const char* url)
 
 
 
+static BString
+DisplayField(const char* text)
+{
+	BString field(text != NULL ? text : "");
+	field.ReplaceAll('\t', ' ');
+	field.ReplaceAll('\n', ' ');
+	return field.Trim();
+}
+
+
+// The displays, one per line, tab-separated: id, frame (left, top, right,
+// bottom, as window frames are measured), primary (0/1), connector, monitor
+// name, vendor, serial number (malloc'd). air/OS: every enabled display of
+// its layout that isn't a mirror; elsewhere the screen, with
+// BScreen::GetMonitorInfo's name and serial number. As PhotoCraft's host.
+char*
+lc_host_displays()
+{
+	BString lines;
+	typedef status_t (*GetLayout)(BMessage&);
+	static GetLayout getLayout = (GetLayout)dlsym(RTLD_DEFAULT,
+		"_ZN8BPrivate18get_display_layoutER8BMessage");
+	BMessage layout;
+	if (getLayout != NULL && getLayout(layout) == B_OK) {
+		BMessage display;
+		for (int32 i = 0; layout.FindMessage("display", i, &display) == B_OK;
+				i++) {
+			BRect frame;
+			if (!display.GetBool("connected", true)
+				|| !display.GetBool("enabled", true)
+				|| display.GetInt32("mirror", -1) >= 0
+				|| display.FindRect("frame", &frame) != B_OK
+				|| !frame.IsValid())
+				continue;
+			BString line;
+			line.SetToFormat("%" B_PRId32 "\t%g\t%g\t%g\t%g\t%d\t%s\t%s\t%s\t%s\n",
+				display.GetInt32("id", i), frame.left, frame.top,
+				frame.right + 1, frame.bottom + 1,
+				display.GetBool("primary", false) ? 1 : 0,
+				DisplayField(display.GetString("name", "")).String(),
+				DisplayField(display.GetString("monitor", "")).String(),
+				DisplayField(display.GetString("vendor", "")).String(),
+				DisplayField(display.GetString("serial", "")).String());
+			lines << line;
+		}
+	}
+	if (lines.Length() == 0) {
+		BScreen screen(B_MAIN_SCREEN_ID);
+		monitor_info info;
+		memset(&info, 0, sizeof(info));
+		if (screen.IsValid() && screen.GetMonitorInfo(&info) != B_OK)
+			memset(&info, 0, sizeof(info));
+		BRect frame = screen.Frame();
+		if (screen.IsValid()) {
+			lines.SetToFormat("%" B_PRId32 "\t%g\t%g\t%g\t%g\t1\t\t%s\t%s\t%s\n",
+				screen.ID().id, frame.left, frame.top, frame.right + 1,
+				frame.bottom + 1, DisplayField(info.name).String(),
+				DisplayField(info.vendor).String(),
+				DisplayField(info.serial_number).String());
+		}
+	}
+	return strdup(lines.String());
+}
+
+
 // Shows a path in Tracker: a folder in a window of its own, a file selected in
 // its folder's window (as Tracker's own "Open parent" does). Tracker is
 // started when it doesn't run.
