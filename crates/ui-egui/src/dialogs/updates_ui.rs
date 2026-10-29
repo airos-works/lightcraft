@@ -1,11 +1,16 @@
 //! Software updates, background check at startup, and startup prompt modal.
+//!
+//! air/OS installs and updates LightCraft as a package (pkgman, SoftwareUpdater), so there Check
+//! for Updates only says so: upstream's release downloads aren't offered.
 
 use serde_json::Value;
 
 use crate::LightcraftApp;
 
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::updater::{Action, Status, Updater};
+use craft_update::updater::Updater;
+#[cfg(not(any(target_arch = "wasm32", target_os = "haiku")))]
+use craft_update::updater::{Action, Status};
 
 pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
@@ -61,7 +66,7 @@ pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
 }
 
 pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "haiku")))]
     {
         app.updates_rt.check_requested = true;
         if let Some(ctx) = &app.updates_rt.repaint {
@@ -73,6 +78,13 @@ pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
     {
         app.updates_rt.manual_window_open = true;
         app.updates_rt.status_message = Some("Update check is not supported in the web browser.".into());
+        Ok(Value::Null)
+    }
+    #[cfg(target_os = "haiku")]
+    {
+        app.updates_rt.manual_window_open = true;
+        app.updates_rt.status_message =
+            Some(crate::i18n::tr("LightCraft is updated with the system's packages: SoftwareUpdater installs newer versions.").to_string());
         Ok(Value::Null)
     }
 }
@@ -94,7 +106,7 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "haiku")))]
     {
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
         let clean = app.session.unsaved().is_none();

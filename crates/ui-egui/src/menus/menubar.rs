@@ -367,6 +367,8 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
         "album.removePhotos" => in_normal_album(app) && !selection_deleted(app),
         // only where the trash is on screen
         "library.emptyRecentlyDeleted" => app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted,
+        // air/OS updates the package (SoftwareUpdater), not upstream's downloads
+        "app.checkForUpdates" => !cfg!(target_os = "haiku"),
         _ => true,
     }
 }

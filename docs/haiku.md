@@ -189,3 +189,13 @@ button are wired to native file panels and Tracker. The in-app update checker is
 not started; air/OS updates come from the package. The release build uses
 craft-fonts `b076417b5880bd4154bd22f00695b1d28c6bea83`, upstream's release pin.
 Package version `0.15.0~airos1-1` is the first with this merge.
+
+## Updates
+
+LightCraft is a package on air/OS, updated by pkgman and SoftwareUpdater;
+craft-update has no Haiku platform. Help ▸ Check for Updates is left out of the
+menus, and the command (still reachable from the control channel) only says
+that SoftwareUpdater installs newer versions, as the web build says it can't
+check. The start-up check stays off. The community links (Help ▸ Join the
+ArtCraft Discord, the About dialog's button) stay: they open the web browser,
+and upstream has no switch a host could set.
