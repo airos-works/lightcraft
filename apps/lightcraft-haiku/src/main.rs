@@ -6,6 +6,7 @@ mod damage;
 mod displays;
 mod frame_cache;
 mod keys;
+mod print;
 mod raster;
 mod window_recovery;
 #[cfg(target_os = "haiku")]

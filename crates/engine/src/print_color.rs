@@ -229,6 +229,13 @@ impl PrintColorJob {
         crate::print_pdf::write(&pages, &PdfInfo { title, output_intent: self.intent.clone() })
     }
 
+    /// A composed page's samples (16-bit RGB in the `Rec2020` output encoding) converted for the
+    /// printer, [`Self::channels`] a pixel: for hosts that draw pages themselves instead of
+    /// handing over [`Self::pdf`].
+    pub fn convert(&self, rgb: &[u16]) -> Result<Vec<u16>, String> {
+        self.transform.apply(rgb)
+    }
+
     /// Samples per pixel the pages are converted to (3 RGB, 4 CMYK, 1 grey).
     pub fn channels(&self) -> usize {
         self.transform.channels()

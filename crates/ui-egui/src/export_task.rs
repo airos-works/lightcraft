@@ -133,20 +133,28 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
 }
 
 /// Print the session's current print (`print.get`) to a PDF in the background, with the same
-/// activity row and cancellation as the other exports.
+/// activity row and cancellation as the other exports. Without a `path`, the pages go to the
+/// host's printing (`services.print_pages`) instead.
 pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
     use lightcraft_engine::print::{compose, output};
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
-    let path = params.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or("missing path")?.to_string();
-    app.session.check_write_target(&path)?;
+    let path = params.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
+    let printer = match &path {
+        Some(path) => {
+            app.session.check_write_target(path)?;
+            None
+        }
+        None => Some(app.services.print_pages.clone().ok_or("missing path")?),
+    };
     let guard = app.session.original_guard();
     let settings = app.session.print.clone();
     let ids = app.session.targets(params).map_err(|e| e.to_string())?;
     let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
     let total = prepared.len();
-    let title = std::path::Path::new(&path).file_stem().and_then(|n| n.to_str()).unwrap_or("Print").to_string();
+    let title = path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).and_then(|n| n.to_str()).unwrap_or("LightCraft Print").to_string();
+    let label = if path.is_some() { "Printing to PDF" } else { "Printing" };
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -165,6 +173,16 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
                 if c.load(Ordering::Relaxed) {
                     return Err("Print cancelled".into());
                 }
+                let Some(path) = path else {
+                    // the host prints them (it asks for the printer)
+                    let print = printer.ok_or("missing path")?;
+                    let count = pages.len();
+                    let receipt = print(crate::PrintPages { pages, job: settings.job.clone(), title, cancel: c.clone() })?;
+                    if receipt.is_none() {
+                        c.store(true, Ordering::Relaxed);
+                    }
+                    return Ok(vec![json!({"printed": receipt, "pages": count, "photos": photos, "print": true})]);
+                };
                 let bytes = output::write(&pages, &settings.job, &title)?;
                 guard.check(std::path::Path::new(&path))?;
                 match write {
@@ -179,7 +197,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     std::thread::Builder::new().name("print".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
+    let row = app.session.activity.start("export", label, Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
     app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
     Ok(json!({"background": true, "total": total}))
@@ -243,7 +261,11 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
         m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
     }
     if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
-        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
+        m = match pdf.get("printed") {
+            Some(Value::String(receipt)) => format!("Printed {} photos: {receipt}", pdf["photos"]),
+            Some(_) => "Nothing printed".to_string(),
+            None => format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]),
+        };
     }
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);

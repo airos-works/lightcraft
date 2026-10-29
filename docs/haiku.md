@@ -359,3 +359,32 @@ the GPU. With the model, `LIGHTCRAFT_SAM3_DIR=<dir> [LC_SAM3_GPU_TEXT=1] cargo
 test -p lightcraft-segment --features wgpu --release --test it gpu` compares the GPU
 and CPU paths end to end. The denoise numbers come from upstream's
 `denoise_cpu::denoise_stage_compares_cpu_and_gpu` engine test.
+
+## Printing
+
+File ▸ Print… prints on air/OS: the Print dialog's button is Print…, and Save as
+PDF… beside it still writes the print-ready PDF. Printing
+opens the system print setup (the print server's window with its printer menu,
+then that printer's paper and job setup, which also take copies and the page
+range); the print server remembers the printer and its settings for LightCraft.
+The pages are composed as for the PDF, at the Print Job panel's resolution, and
+drawn into a `BPrintJob` (`apps/lightcraft-haiku/src/print.rs`, the Be print kit
+calls in `apps/lightcraft-haiku-host/native/print.cpp`, both from WordCraft's
+host): each page scaled to the printer's resolution (at most 300 dpi), placed
+on the driver's paper at its real size (centred, shrunk only when bigger than
+the paper, turned when a landscape page meets portrait paper), and spooled as
+the strips of rows with ink. A progress window, and the activity row, cancel
+the job.
+
+The print kit has no colour management: its bitmaps are device RGB, which the
+drivers (PostScript, PCL, Gutenprint) take as sRGB. Managed by Printer sends
+sRGB (also when the panel says Adobe RGB, which only the PDF can carry); an
+RGB printer profile converts the pages to the printer's values, which the
+driver passes on; a CMYK profile can't be printed this way and asks for the PDF.
+libprint's drivers start in monochrome: choose Color in the job setup.
+
+Tested on the X399 with a PostScript printer on a JetDirect transport to a local
+`nc -l -p 9100`, the output decoded to PNG: a 7.8 × 5.2 in photo on A4 landed
+within a printer dot of its place and size, portrait and landscape pages on
+portrait paper were turned with their tops to the left, and the printed colours
+matched the app's own sRGB render of the photo to half a level on average.

@@ -99,6 +99,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     });
     let mut close = false;
     let mut confirm = false;
+    // the dialog's other button (Print: Save as PDF… where the host prints)
+    let mut alternative = false;
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button);
     // a widget that has the keyboard focus (a text field, a button or checkbox reached with Tab)
     // takes Return itself. Consumed before the dialog is drawn, so nothing else sees it too.
@@ -177,7 +179,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
+                button_row(app, ui, &dlg, &mut close, &mut confirm, &mut alternative);
             });
             if import {
                 crate::import::note_dialog_bottom(ui);
@@ -216,6 +218,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     }
     if !raw_blocked && confirm {
         close |= confirmed(app, ctx, &mut dlg);
+    }
+    if !raw_blocked && alternative && matches!(dlg, Dialog::Print) {
+        close = true;
+        if let Err(e) = app.run("app.print", json!({"pdf": true})) {
+            app.toast(ctx, e);
+        }
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
     if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
@@ -338,6 +346,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } => "Export…",
+        Dialog::Print if app.services.print_pages.is_some() => "Print…",
         Dialog::Print => "Print to PDF…",
         Dialog::Merge { .. } => "Merge",
         Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
@@ -394,8 +403,9 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     !rename_blocked && (informational || (!waiting && !bad_rules))
 }
 
-/// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
+/// The row of buttons under a dialog: Cancel and the confirm (and the Print dialog's Save as PDF…
+/// where the host prints); `close`, `confirm` and `alternative` are set when one is clicked.
+fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool, alternative: &mut bool) {
     let informational = is_informational(dlg);
     let sam = SamState::of(app);
     let cancel = cancel_label(dlg, &sam);
@@ -414,9 +424,14 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
         .widget("button:dialogOk")
         .id_salt(kind)
         .min_width(72.0);
+    let pdf_button = (matches!(dlg, Dialog::Print) && app.services.print_pages.is_some())
+        .then(|| Button::new(crate::i18n::tr("Save as PDF…")).widget("button:printSavePdf").id_salt(kind).min_width(72.0));
     // (Cancel first, then the confirm: the keyboard goes through them as the eye does)
     let gap = ui.spacing().item_spacing.x;
     let mut buttons_w = 0.0;
+    if let Some(b) = &pdf_button {
+        buttons_w += b.desired_size(ui).x + gap;
+    }
     if !informational {
         buttons_w += cancel_button.desired_size(ui).x + gap;
     }
@@ -424,6 +439,9 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
         buttons_w += ok_button.desired_size(ui).x;
     }
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
+    if pdf_button.is_some_and(|b| b.show(ui).clicked()) {
+        *alternative = true;
+    }
     if !informational && cancel_button.show(ui).clicked() {
         *close = true;
     }

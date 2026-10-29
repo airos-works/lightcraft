@@ -48,6 +48,22 @@ pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 
+/// The pages of a print (File ▸ Print…) for a host that sends them to a printer itself.
+pub struct PrintPages {
+    /// The composed pages, as for the PDF.
+    pub pages: Vec<lightcraft_engine::print::PageRaster>,
+    /// The Print Job panel's settings (resolution, colour).
+    pub job: lightcraft_engine::print::PrintJob,
+    /// The job's name.
+    pub title: String,
+    /// Set when the activity row is cancelled.
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Print the pages (on a worker thread): what the app reports (`Some`), or `None` when the user
+/// cancelled the host's print setup or job.
+pub type PrintPagesFn = std::sync::Arc<dyn Fn(PrintPages) -> Result<Option<String>, String> + Send + Sync>;
+
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
@@ -90,6 +106,9 @@ pub struct Services {
     pub pick_print_templates: Option<PickFiles>,
     /// Save dialog for an exported print template (`.lcprint`).
     pub save_print_template: Option<SaveFile>,
+    /// Print through the system's printers (air/OS: the Be print kit). With it, the Print
+    /// dialog prints and offers Save as PDF beside; without it, it saves a PDF.
+    pub print_pages: Option<PrintPagesFn>,
     pub write: Option<WriteFn>,
     /// Create-new writer (never replaces an existing path), for screenshots of destinations that
     /// did not exist when the request was admitted. Required for such captures: falling back to

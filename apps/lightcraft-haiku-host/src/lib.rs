@@ -6,6 +6,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 
+pub mod print;
 pub mod scanout;
 
 /// An input or window event from the native host. Keep in step with `LcEvent` in `host.cpp`.

@@ -295,6 +295,60 @@ fn print_to_pdf_picks_a_file_and_runs_in_the_background() {
 }
 
 #[test]
+fn a_host_that_prints_gets_the_pages_and_the_pdf_stays_one_click_away() {
+    // what the host's print hook was given: page sizes in inches, the job's ppi, the title
+    let got = Arc::new(Mutex::new(Vec::<(f32, f32, f32, String)>::new()));
+    let seen = got.clone();
+    let asked = Arc::new(Mutex::new(0usize));
+    let picks = asked.clone();
+    let services = Services {
+        print_pages: Some(Arc::new(move |job: crate::PrintPages| {
+            let mut g = seen.lock().unwrap();
+            for p in &job.pages {
+                assert_eq!(p.rgb.len(), (p.width * p.height * 3) as usize);
+                g.push((p.width as f32 / p.ppi, p.height as f32 / p.ppi, job.job.ppi, job.title.clone()));
+            }
+            // the second job is cancelled in the host's print setup
+            Ok((g.len() <= 1).then(|| "1 page × 1 sent to the printer".to_string()))
+        })),
+        picker: Some(Box::new(move |_| {
+            *picks.lock().unwrap() += 1;
+            let (_tx, rx) = std::sync::mpsc::channel();
+            Ok(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = demo(services);
+    open_print(&mut h);
+    assert!(has(&h, "button:printSavePdf"), "Save as PDF… sits beside Print…");
+    cmd(&mut h, "print.set", json!({"layout": {"page": {"paper": "5x7"}}, "job": {"ppi": 100.0}}));
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.ui.dialog.is_none());
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.last_export_result.is_some()), "the print did not finish");
+    assert_eq!(*asked.lock().unwrap(), 0, "printing asks for no file");
+    let pages = got.lock().unwrap().clone();
+    assert_eq!(pages.len(), 1);
+    let (w, hh, ppi, title) = &pages[0];
+    assert!((w - 5.0).abs() < 0.02 && (hh - 7.0).abs() < 0.02, "5 x 7 in, got {w} x {hh}");
+    assert_eq!((*ppi, title.as_str()), (100.0, "LightCraft Print"));
+    let last = h.app.last_export_result.take().unwrap();
+    assert_eq!(last["files"][0]["printed"], "1 page × 1 sent to the printer");
+    assert_eq!(last["cancelled"], false);
+
+    // cancelled in the host: nothing printed, reported as cancelled
+    cmd(&mut h, "app.print", json!({}));
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.last_export_result.is_some()));
+    let last = h.app.last_export_result.take().unwrap();
+    assert_eq!((&last["files"][0]["printed"], &last["cancelled"]), (&Value::Null, &json!(true)));
+
+    // Save as PDF… asks for a file instead
+    open_print(&mut h);
+    click(&mut h, "button:printSavePdf");
+    assert!(h.app.ui.dialog.is_none());
+    assert_eq!(*asked.lock().unwrap(), 1, "the PDF's save dialog");
+}
+
+#[test]
 fn printing_shows_a_row_in_the_activity_stack_and_stops() {
     let mut app = LightcraftApp::new(
         lightcraft_engine::Session::with_demo(),

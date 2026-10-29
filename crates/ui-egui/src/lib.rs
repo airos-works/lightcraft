@@ -84,8 +84,8 @@ pub use clock::{monotonic_ms, now_ms};
 #[cfg(any(target_os = "linux", target_os = "haiku"))]
 pub use services::OpenModelFolderFn;
 pub use services::{
-    CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, PrintPages, PrintPagesFn, RevealFn, SaveFile,
+    ScreenProfileFn, Services, SharedWrite, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 

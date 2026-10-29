@@ -1160,6 +1160,10 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Some(Err("an export is already running".into()));
             }
             let mut params = p.clone();
+            // a host that prints (air/OS) asks for the printer itself; `pdf: true` saves a PDF there too
+            if p.get("path").is_none() && app.services.print_pages.is_some() && p.get("pdf").and_then(Value::as_bool) != Some(true) {
+                return Some(crate::export_task::start_print(app, &params));
+            }
             if p.get("path").is_none() {
                 let req = PickRequest::save("Print to PDF", "PDF", &["pdf"], "Print.pdf");
                 let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {

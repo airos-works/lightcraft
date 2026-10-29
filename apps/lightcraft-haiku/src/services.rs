@@ -124,6 +124,17 @@ fn screen_profile() -> lightcraft_ui_egui::ScreenProfileFn {
         reader.read(&host::displays(), w)
     })
 }
+/// File ▸ Print…'s pages to the printer the system print setup picks (`print.rs`).
+fn print_pages() -> lightcraft_ui_egui::PrintPagesFn {
+    std::sync::Arc::new(|job: lightcraft_ui_egui::PrintPages| {
+        let mut pages = crate::print::PhotoPages::new(job.pages, &job.job, job.cancel).map_err(|e| e.to_string())?;
+        match crate::print::print(&mut pages, &job.title) {
+            Ok(receipt) => Ok(Some(receipt)),
+            Err(crate::print::Error::Cancelled) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+}
 pub fn native(log_file: Option<&std::path::Path>) -> Services {
     Services {
         picker: Some(Box::new(picker)),
@@ -143,6 +154,7 @@ pub fn native(log_file: Option<&std::path::Path>) -> Services {
         save_slideshow_template: Some(save("Export Slideshow Template", &["json"])),
         pick_print_templates: Some(files("Import Print Templates", &[lightcraft_engine::print::template::FILE_EXT])),
         save_print_template: Some(save("Export Print Template", &[lightcraft_engine::print::template::FILE_EXT])),
+        print_pages: Some(print_pages()),
         pick_lightroom_catalog: Some(Box::new(|| pick_sync(PickRequest::file("Import Lightroom Catalog", "Catalog", &["lrcat"])).into_iter().next())),
         pick_folder: Some(Box::new(|| pick_sync(PickRequest::folder("Choose Folder")).into_iter().next())),
         write: Some(Box::new(write)),
