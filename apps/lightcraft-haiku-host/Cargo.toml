@@ -8,5 +8,11 @@ publish = false
 [lints]
 workspace = true
 
+[target.'cfg(target_os = "haiku")'.dependencies]
+# The screen's frame buffer as a Vulkan buffer (src/scanout.rs): wgpu's Vulkan backend and the
+# ash version it uses.
+wgpu.workspace = true
+ash = "0.38"
+
 [build-dependencies]
 cc = "1"

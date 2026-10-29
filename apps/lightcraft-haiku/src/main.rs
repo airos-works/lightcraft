@@ -2,12 +2,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(not(target_os = "haiku"), allow(dead_code))]
+mod damage;
 mod frame_cache;
 mod keys;
 mod raster;
 mod window_recovery;
 #[cfg(target_os = "haiku")]
 use lightcraft_haiku_host as host;
+#[cfg(target_os = "haiku")]
+use lightcraft_haiku_host::scanout;
 #[cfg(target_os = "haiku")]
 #[path = "../../lightcraft/src/alloc_release.rs"]
 mod alloc_release;
@@ -48,6 +51,8 @@ mod gpu;
 #[path = "../../lightcraft/src/logging.rs"]
 mod logging;
 #[cfg(target_os = "haiku")]
+mod present;
+#[cfg(target_os = "haiku")]
 mod services;
 #[cfg(target_os = "haiku")]
 mod shell;
@@ -69,7 +74,7 @@ fn guard<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Stri
 }
 #[cfg(target_os = "haiku")]
 fn native_main() -> Result<(), String> {
-    use desktop::*;
+    use desktop::{HELP, control_port_from, launch_imports, log_dir, open_session, panic_log_path_with};
     use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path};
     use prefs::{PrefsWriter, config_dir, load_prefs, prefs_path};
     host::export_vulkan_driver();

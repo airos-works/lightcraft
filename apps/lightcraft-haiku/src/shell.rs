@@ -108,7 +108,7 @@ impl Shell {
             None
         } else {
             window_recovery.record("Vulkan device creation");
-            let result = crate::guard("GPU startup", crate::gpu::Gpu::new);
+            let result = crate::guard("GPU startup", || crate::gpu::Gpu::new(&crate::gpu::Native));
             window_recovery.clear();
             match result {
                 Ok(gpu) => Some(gpu),
@@ -120,7 +120,11 @@ impl Shell {
             }
         };
         let gpu_health = gpu.as_ref().map(|g| g.health.clone());
-        app.perf.host_renderer = Some(if gpu.is_some() { "Vulkan bitmap readback" } else { "CPU bitmap" });
+        app.perf.host_renderer = Some(gpu.as_ref().map_or("CPU bitmap", |g| match g.present_mode() {
+            crate::present::Mode::Direct => "Vulkan direct to screen",
+            crate::present::Mode::Readback => "Vulkan changed-tile readback",
+            crate::present::Mode::Full => "Vulkan bitmap readback",
+        }));
         log::info!(target: "lightcraft_haiku", "air/OS window renderer: {}", app.perf.host_renderer.unwrap_or("unknown"));
         let dev = host::device_scale();
         let native_ppp = ui_scale * dev;
@@ -169,16 +173,37 @@ impl Shell {
             if happened || due {
                 self.frame();
             }
+            self.present_chores();
+        }
+    }
+
+    /// What the presenter does between frames: the last frame again where the window moved on
+    /// the screen, and app_server's copy catching up with frames that went straight to the screen.
+    fn present_chores(&mut self) {
+        let dev = self.dev;
+        let Some(gpu) = &mut self.gpu else { return };
+        let native = crate::gpu::Native;
+        let result = if gpu.wants_present() {
+            crate::guard("GPU present", || gpu.present_again(dev, &native))
+        } else if gpu.sync_due().is_some_and(|at| at <= Instant::now()) {
+            crate::guard("GPU sync", || gpu.sync(dev, &native))
+        } else {
+            return;
+        };
+        if let Err(e) = result {
+            log::error!(target: "lightcraft_haiku", "{e}");
+            if let Some(health) = &self.gpu_health {
+                health.mark(e);
+            }
+            self.ctx.request_repaint();
         }
     }
 
     /// When the next frame is due, if one is.
     fn next_due(&self) -> Option<Instant> {
         let woken = self.woken_for.lock().ok().and_then(|w| *w);
-        match (self.repaint_at, woken) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let sync = self.gpu.as_ref().and_then(|g| g.sync_due());
+        [self.repaint_at, woken, sync].into_iter().flatten().min()
     }
 
     fn timeout(&self) -> Option<Duration> {
@@ -450,9 +475,13 @@ impl Shell {
             let t2 = Instant::now();
             let clear = ctx.global_style().visuals.panel_fill;
             let (pw, ph) = (w as usize, h as usize);
+            let dev = self.dev;
+            // The presenter shows GPU frames itself; the software rasteriser's go below.
             let dirty = if let Some(gpu) = &mut self.gpu {
-                match crate::guard("GPU frame", || gpu.render([pw as u32, ph as u32], prims, &out.textures_delta, ppp, clear)) {
-                    Ok(changed) => changed.then_some([0, 0, pw, ph]),
+                match crate::guard("GPU frame", || {
+                    gpu.render([pw as u32, ph as u32], prims, &out.textures_delta, ppp, clear, dev, &crate::gpu::Native)
+                }) {
+                    Ok(_) => None,
                     Err(e) => {
                         log::error!(target: "lightcraft_haiku", "{e}");
                         if let Some(health) = &self.gpu_health {
@@ -472,9 +501,8 @@ impl Shell {
                 ctx.request_repaint();
                 delay = Duration::ZERO;
             }
-            if let Some(dirty) = dirty.filter(|_| !faulted && !minimized) {
-                let pixels = self.gpu.as_ref().map_or_else(|| self.raster.pixels(), |g| g.pixels());
-                host::present(pixels, pw, ph, dirty, self.dev);
+            if let Some(dirty) = dirty.filter(|_| !faulted && !minimized && self.gpu.is_none()) {
+                host::present(self.raster.pixels(), pw, ph, dirty, self.dev);
             }
             log::debug!(target: "lightcraft_haiku",
                 "frame {pw}x{ph}: ui {:.1} ms, tessellate {:.1} ms, raster {:.1} ms, present {:.1} ms, dirty {dirty:?}",
@@ -490,7 +518,14 @@ impl Shell {
         if !self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some()) {
             for callback in std::mem::take(&mut self.screenshots) {
                 // egui 0.37 answers a screenshot request through its one-shot callback
-                callback.complete(Arc::new(self.gpu.as_ref().map_or_else(|| self.raster.image(), |g| g.image())));
+                let image = match self.gpu.as_mut() {
+                    Some(gpu) => gpu.image().unwrap_or_else(|e| {
+                        log::warn!(target: "lightcraft_haiku", "screenshot: {e}");
+                        egui::ColorImage::default()
+                    }),
+                    None => self.raster.image(),
+                };
+                callback.complete(Arc::new(image));
                 delay = Duration::ZERO;
             }
         } else {

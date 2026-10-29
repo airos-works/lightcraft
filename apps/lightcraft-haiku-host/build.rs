@@ -13,7 +13,8 @@ fn main() {
         .flag("-Wno-unused-parameter")
         .opt_level(2)
         .compile("lightcraft_haiku_host");
-    for lib in ["be", "tracker", "translation", "stdc++"] {
+    // game: BDirectWindow, which lets frames go straight into the screen.
+    for lib in ["be", "game", "tracker", "translation", "stdc++"] {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }
 }

@@ -35,10 +35,38 @@ and adds a Deskbar entry. It does not replace existing preferred image editors.
 ## Rendering and settings
 
 The photo pipeline uses upstream Vulkan compute shaders. The window renderer
-uses an independent Vulkan device to draw egui into a reusable offscreen target,
-then copies the finished bitmap to the native view. Haiku does not provide a
-wgpu window surface. Identical completed frames reuse the bitmap, avoiding GPU
-submission and readback; geometry, clipping, scale or texture changes redraw it.
+uses an independent Vulkan device to draw egui, in BGRA (the screen's and a
+`B_RGB32` bitmap's byte order), into the presenter's frame texture
+(`apps/lightcraft-haiku/src/present.rs`, shared with PhotoCraft's host), which
+gets it onto the window; Haiku does not provide a wgpu window surface. Identical
+completed frames are not drawn again; geometry, clipping, scale or texture
+changes redraw. `LIGHTCRAFT_PRESENT` picks how a frame reaches the window:
+
+- `readback` (the default): a compute pass compares the frame with the one
+  app_server already has, 64 px tile by tile; only the changed tiles, joined
+  into a few rectangles (`damage.rs`), are copied back and drawn.
+- `full`: the whole frame is read back and drawn every time (the first host).
+- `direct` (experimental): the window is a `BDirectWindow` with air/OS's
+  `B_DIRECT_DEVICE_PIXELS`, the screen's frame buffer is imported into Vulkan
+  with the drivers' private `VkImportScanoutMemoryHAIKU`
+  (`apps/lightcraft-haiku-host/src/scanout.rs`, with the host crate's other
+  `unsafe`), and the GPU copies each frame into the visible parts of the window;
+  app_server's own copy catches up through a readback a quarter of a second
+  later, and the direct daemon thread waits for the GPU's copies before the
+  window is moved or covered. `PRESENT_VERIFY=1` checks each direct frame
+  against the frame buffer. Not the default: on the Framework 13 (RADV,
+  amdgpu_drm) the copies were pixel-exact (0 of 2,746,548 visible pixels
+  differed) but the Vulkan device is lost a few seconds after the frame buffer
+  is imported, even with no copies at all, and the window renderer then falls
+  back to the CPU. It has not been tried on NVK.
+
+Measured on the Framework 13 (Radeon 760M, a 2076×1323-pixel window,
+`tools/haiku/present-bench.py --samples 40`, against the 0.15.0~airos1-1
+build): app_server's processor time 0.215 → 0.126 s, a median of 12,288 pixels
+copied back per frame instead of 2,746,548; the frame thread's time and the
+request-to-frame latency are about the same (hover 21.0 → 20.7 ms), being mostly
+the GPU drawing the frame (3.9 ms of the 4.1 ms present). Per-frame costs are
+logged with `RUST_LOG=warn,lightcraft_haiku=debug,present=debug`.
 Both devices reject software Vulkan adapters. The native
 window falls back to its CPU renderer if hardware initialization or rendering
 fails; photo processing has the shared engine's separate CPU fallback.

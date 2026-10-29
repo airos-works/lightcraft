@@ -6,6 +6,8 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 
+pub mod scanout;
+
 /// An input or window event from the native host. Keep in step with `LcEvent` in `host.cpp`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -69,6 +71,8 @@ unsafe extern "C" {
     fn lc_host_next_event(event: *mut RawEvent) -> i32;
     fn lc_host_event_text() -> *const c_char;
     fn lc_host_present(pixels: *const u32, w: i32, h: i32, x0: i32, y0: i32, x1: i32, y1: i32, scale: f32);
+    fn lc_host_present_rects(pixels: *const u32, w: i32, h: i32, rects: *const i32, count: i32, scale: f32);
+    fn lc_host_direct_sink(sink: Option<unsafe extern "C" fn(*const RawDirect)>);
     fn lc_host_view_size(w: *mut f32, h: *mut f32);
     fn lc_host_window_info(info: *mut RawWindowInfo);
     fn lc_host_set_title(title: *const c_char);
@@ -199,6 +203,75 @@ pub fn present(pixels: &[u32], width: usize, height: usize, dirty: [usize; 4], s
     // SAFETY: `pixels` holds width × height values; the host only reads them.
     unsafe {
         lc_host_present(pixels.as_ptr(), to_i32(width), to_i32(height), to_i32(dirty[0]), to_i32(dirty[1]), to_i32(dirty[2]), to_i32(dirty[3]), scale)
+    }
+}
+
+/// Shows the rectangles (`[x0, y0, x1, y1)` device pixels) of `pixels` (`size`, 0xAARRGGBB) in
+/// the window: a frame read back from the GPU. While frames also go straight into the screen,
+/// returns once app_server has drawn them.
+pub fn present_rects(pixels: &[u32], size: [u32; 2], rects: &[[u32; 4]], scale: f32) {
+    let [w, h] = size;
+    if pixels.len() < w as usize * h as usize || rects.is_empty() {
+        return;
+    }
+    let flat: Vec<i32> = rects.iter().flatten().map(|&v| i32::try_from(v).unwrap_or(i32::MAX)).collect();
+    let n = |v: usize| i32::try_from(v).unwrap_or(i32::MAX);
+    // SAFETY: `pixels` holds w × h values and `flat` the rectangles; the host only reads them.
+    unsafe { lc_host_present_rects(pixels.as_ptr(), n(w as usize), n(h as usize), flat.as_ptr(), n(rects.len()), scale) }
+}
+
+/// The window's direct connection as `host.cpp` reports it (`LcDirect`).
+#[repr(C)]
+struct RawDirect {
+    connected: i32,
+    bounds: [i32; 4],
+    bytes_per_row: u32,
+    rect_count: u32,
+    rects: *const i32,
+}
+
+/// Where the window's content is in the frame buffer (a direct window with air/OS's
+/// `B_DIRECT_DEVICE_PIXELS`): its bounds and visible parts, frame buffer pixels, edges included.
+pub struct DirectReport<'a> {
+    pub bounds: [i32; 4],
+    pub bytes_per_row: u32,
+    pub rects: &'a [[i32; 4]],
+}
+
+/// Called on the window's direct daemon thread (app_server waits for it, half a second at
+/// most) with the window's new place, or `None` when it may no longer draw into the screen.
+pub type DirectSink = std::sync::Arc<dyn Fn(Option<DirectReport>) + Send + Sync>;
+
+static DIRECT_SINK: std::sync::Mutex<Option<DirectSink>> = std::sync::Mutex::new(None);
+
+/// The window's direct daemon thread, with `host.cpp`'s connection lock held.
+unsafe extern "C" fn direct_connected(raw: *const RawDirect) {
+    let sink = DIRECT_SINK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let Some(sink) = sink else { return };
+    // SAFETY: host.cpp passes a valid report whose rectangles live for the call.
+    let raw = unsafe { &*raw };
+    if raw.connected == 0 || raw.rects.is_null() {
+        sink(None);
+        return;
+    }
+    // SAFETY: `rect_count` rectangles of four values each.
+    let flat = unsafe { std::slice::from_raw_parts(raw.rects, raw.rect_count as usize * 4) };
+    sink(Some(DirectReport { bounds: raw.bounds, bytes_per_row: raw.bytes_per_row, rects: flat.as_chunks::<4>().0 }));
+}
+
+/// Where the window's direct connection is reported (the last one at once), or nowhere; unsetting
+/// waits for a report in progress.
+pub fn set_direct_sink(sink: Option<DirectSink>) {
+    // host.cpp calls `direct_connected` with its lock held: take that lock first when unsetting,
+    // and set ours first when setting (the latest report is replayed at once).
+    if sink.is_some() {
+        *DIRECT_SINK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
+        // SAFETY: a function with the expected signature.
+        unsafe { lc_host_direct_sink(Some(direct_connected)) }
+    } else {
+        // SAFETY: unsets it.
+        unsafe { lc_host_direct_sink(None) }
+        *DIRECT_SINK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 

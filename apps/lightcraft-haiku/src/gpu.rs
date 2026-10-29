@@ -1,15 +1,16 @@
-//! Hardware rendering into a reusable offscreen target. Haiku has no wgpu surface handle;
-//! the native host presents the completed bitmap. egui triangles use a real Vulkan device; the photo pipeline uses its own
-//! Vulkan compute device. Readback cost is reported separately from GPU submission.
-use egui_wgpu::{RenderState, RendererOptions, ScreenDescriptor, WgpuConfiguration, WgpuSetup};
+//! Hardware rendering of the window. Haiku has no wgpu surface; egui's triangles draw into the
+//! presenter's frame texture (`present.rs`), which gets it onto the screen. The photo pipeline
+//! uses its own Vulkan compute device.
+use egui_wgpu::{RenderState, Renderer, RendererOptions, ScreenDescriptor, WgpuConfiguration, WgpuSetup};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+use crate::present::{self, Presenter, Shown};
 
 pub struct Gpu {
     pub state: RenderState,
     pub health: Health,
-    target: Option<Target>,
-    pixels: Vec<u32>,
+    presenter: Presenter,
     completed: Option<crate::frame_cache::Frame>,
 }
 #[derive(Clone, Default)]
@@ -22,15 +23,31 @@ impl Health {
         *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
     }
 }
-struct Target {
-    size: [u32; 2],
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    readback: wgpu::Buffer,
-    stride: u32,
+
+/// The native window for the presenter.
+pub struct Native;
+impl present::Native for Native {
+    fn show(&self, pixels: &[u32], size: [u32; 2], rects: &[[u32; 4]], scale: f32) {
+        crate::host::present_rects(pixels, size, rects, scale);
+    }
+    fn set_direct_link(&self, link: Option<Arc<present::DirectLink>>) {
+        crate::host::set_direct_sink(link.map(|link| -> crate::host::DirectSink {
+            Arc::new(move |report: Option<crate::host::DirectReport>| {
+                link.connected(report.map(|r| {
+                    let [left, top, right, bottom] = r.bounds;
+                    let size = [u32::try_from(right - left + 1).unwrap_or(0), u32::try_from(bottom - top + 1).unwrap_or(0)];
+                    present::Connection { origin: [left, top], size, rects: r.rects, bytes_per_row: r.bytes_per_row }
+                }));
+            })
+        }));
+    }
+    fn waker(&self) -> fn() {
+        crate::host::wake
+    }
 }
+
 impl Gpu {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(native: &dyn present::Native) -> Result<Self, String> {
         let mut setup = WgpuSetup::without_display_handle();
         let WgpuSetup::CreateNew(ref mut create) = setup else { return Err("Expected a new GPU device".into()) };
         create.instance_descriptor.backends = wgpu::Backends::VULKAN;
@@ -45,7 +62,11 @@ impl Gpu {
         create.instance_descriptor.flags = lightcraft_engine::gpu::backend::instance_flags_from_env(create.instance_descriptor.flags);
         let instance = pollster::block_on(setup.new_instance());
         let config = WgpuConfiguration { wgpu_setup: setup, ..Default::default() };
-        let state = pollster::block_on(RenderState::create(&config, &instance, None, RendererOptions::default())).map_err(|e| e.to_string())?;
+        let mut state = pollster::block_on(RenderState::create(&config, &instance, None, RendererOptions::default())).map_err(|e| e.to_string())?;
+        // Frames are drawn in the screen's byte order: they go to the frame buffer, or into a
+        // B_RGB32 bitmap, as they are.
+        state.target_format = present::FORMAT;
+        state.renderer = Arc::new(egui::mutex::RwLock::new(Renderer::new(&state.device, present::FORMAT, RendererOptions::default())));
         log::info!(target: "lightcraft_haiku", "air/OS GPU: {:?}", state.adapter.get_info());
         let health = Health::default();
         let lost = health.clone();
@@ -54,47 +75,19 @@ impl Gpu {
         });
         let errors = health.clone();
         state.device.on_uncaptured_error(Arc::new(move |e| errors.mark(format!("Window GPU error: {e}"))));
-        Ok(Self { state, health, target: None, pixels: Vec::new(), completed: None })
+        let presenter = Presenter::new(&state.device, &state.queue, present::Mode::from_env("LIGHTCRAFT_PRESENT"), native);
+        log::info!(target: "lightcraft_haiku", "air/OS present: {}", presenter.mode().name());
+        Ok(Self { state, health, presenter, completed: None })
     }
     pub fn max_texture_side(&self) -> usize {
         self.state.device.limits().max_texture_dimension_2d as usize
     }
-    fn resize(&mut self, size: [u32; 2]) -> Result<(), String> {
-        if self.target.as_ref().is_some_and(|t| t.size == size) {
-            return Ok(());
-        }
-        let [w, h] = size;
-        let limit = self.state.device.limits().max_texture_dimension_2d;
-        if w == 0 || h == 0 || w > limit || h > limit {
-            return Err(format!("Window {w}x{h} exceeds GPU limit {limit}"));
-        }
-        let stride = w.checked_mul(4).and_then(|s| s.checked_add(255)).map(|s| s / 256 * 256).ok_or("Readback stride overflow")?;
-        let bytes = u64::from(stride) * u64::from(h);
-        // Bound allocations even when the window server sends unreasonable dimensions.
-        if bytes > self.state.device.limits().max_buffer_size.min(512 << 20) {
-            return Err("Window readback exceeds memory budget".into());
-        }
-        let texture = self.state.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("LightCraft native frame"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.state.target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        let readback = self.state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("LightCraft native readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        self.target = Some(Target { size, texture, view, readback, stride });
-        self.pixels.resize(w as usize * h as usize, 0);
-        Ok(())
+    pub fn present_mode(&self) -> present::Mode {
+        self.presenter.mode()
     }
+    /// Draws the frame and shows it (`scale` device pixels per logical pixel). False when it is
+    /// the frame already shown.
+    #[expect(clippy::too_many_arguments, reason = "one frame's inputs and where it goes")]
     pub fn render(
         &mut self,
         size: [u32; 2],
@@ -102,13 +95,14 @@ impl Gpu {
         delta: &egui::TexturesDelta,
         ppp: f32,
         clear: egui::Color32,
-    ) -> Result<bool, String> {
+        scale: f32,
+        native: &dyn present::Native,
+    ) -> Result<Option<Shown>, String> {
         if delta.set.is_empty() && delta.free.is_empty() && self.completed.as_ref().is_some_and(|f| f.matches(size, &primitives, ppp, clear)) {
-            return Ok(false);
+            return Ok(None);
         }
-        self.resize(size)?;
-        let target = self.target.as_ref().ok_or("Missing frame target")?;
         let state = &self.state;
+        let view = self.presenter.target(size)?;
         let start = Instant::now();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("LightCraft native frame") });
@@ -125,7 +119,7 @@ impl Gpu {
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("LightCraft native UI"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &target.view,
+                        view,
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
@@ -141,72 +135,74 @@ impl Gpu {
                 .forget_lifetime();
             renderer.render(&mut pass, &primitives, &screen);
         }
-        encoder.copy_texture_to_buffer(
-            target.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &target.readback,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(target.stride), rows_per_image: Some(size[1]) },
-            },
-            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-        );
         commands.push(encoder.finish());
-        let submission = state.queue.submit(commands);
+        drop(renderer);
+        let encoded = start.elapsed();
+        let shown = self.presenter.present(commands, native, scale)?;
+        let mut renderer = self.state.renderer.write();
         for id in &delta.free {
             renderer.free_texture(id);
         }
         drop(renderer);
-        let submitted = start.elapsed();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        target.readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        state
-            .device
-            .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(Duration::from_secs(5)) })
-            .map_err(|e| e.to_string())?;
-        rx.recv_timeout(Duration::from_secs(1)).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-        {
-            let mapped = target.readback.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
-            for (src, dst) in mapped.chunks_exact(target.stride as usize).zip(self.pixels.chunks_exact_mut(size[0] as usize)) {
-                for (pixel, out) in src.as_chunks::<4>().0.iter().zip(dst) {
-                    *out = u32::from_le_bytes([pixel[2], pixel[1], pixel[0], pixel[3]]);
-                }
-            }
-        }
-        target.readback.unmap();
         log::debug!(target: "lightcraft_haiku",
-            "GPU frame {}x{}: submit {:.2} ms, readback {:.2} ms",
+            "GPU frame {}x{}: encode {:.2} ms, present {:.2} ms ({}, {} px in {} rects)",
             size[0],
             size[1],
-            submitted.as_secs_f64() * 1e3,
-            (start.elapsed() - submitted).as_secs_f64() * 1e3
+            encoded.as_secs_f64() * 1e3,
+            shown.wait.as_secs_f64() * 1e3,
+            if shown.direct { "direct" } else { "readback" },
+            shown.pixels,
+            shown.rects
         );
         self.completed = Some(crate::frame_cache::Frame { primitives, size, ppp, clear });
-        Ok(true)
+        Ok(Some(shown))
     }
-    pub fn pixels(&self) -> &[u32] {
-        &self.pixels
+    /// The last frame again, where the window's place on the screen changed.
+    pub fn present_again(&mut self, scale: f32, native: &dyn present::Native) -> Result<Shown, String> {
+        self.presenter.present(Vec::new(), native, scale)
     }
-    pub fn image(&self) -> egui::ColorImage {
-        let size = self.target.as_ref().map_or([0, 0], |t| t.size.map(|n| n as usize));
-        let rgba: Vec<u8> = self
-            .pixels
-            .iter()
-            .flat_map(|p| {
-                let [b, g, r, a] = p.to_le_bytes();
-                [r, g, b, a]
-            })
-            .collect();
-        egui::ColorImage::from_rgba_premultiplied(size, &rgba)
+    pub fn wants_present(&self) -> bool {
+        self.presenter.wants_present()
+    }
+    pub fn sync_due(&self) -> Option<Instant> {
+        self.presenter.sync_due()
+    }
+    /// Brings app_server's copy of the window up to date with what went straight to the screen.
+    pub fn sync(&mut self, scale: f32, native: &dyn present::Native) -> Result<Shown, String> {
+        self.presenter.sync(native, scale)
+    }
+    pub fn image(&mut self) -> Result<egui::ColorImage, String> {
+        self.presenter.image()
+    }
+}
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        // The window keeps what it reports its direct connection to, and with it the device.
+        self.presenter.detach(&Native);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    /// What the window was last shown, without a window.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<u32>>);
+    impl present::Native for Recorder {
+        fn show(&self, pixels: &[u32], _size: [u32; 2], _rects: &[[u32; 4]], _scale: f32) {
+            *self.0.lock().unwrap() = pixels.to_vec();
+        }
+        fn set_direct_link(&self, _link: Option<Arc<present::DirectLink>>) {}
+        fn waker(&self) -> fn() {
+            || {}
+        }
+    }
     #[test]
     fn native_gpu_pixels_match_cpu_and_device_loss_preserves_cpu_textures() {
-        let mut gpu = match Gpu::new() {
+        let native = Recorder::default();
+        let mut gpu = match Gpu::new(&native) {
             Ok(gpu) => gpu,
             Err(e) => {
                 lightcraft_testkit::skip!(Gpu, "native window Vulkan device: {e}");
@@ -226,18 +222,18 @@ mod tests {
         }];
         let mut cpu = crate::raster::Rasterizer::new();
         cpu.set_textures(&delta);
-        assert!(gpu.render([8, 8], primitives.to_vec(), &delta, 1.0, egui::Color32::BLACK).unwrap());
+        assert!(gpu.render([8, 8], primitives.to_vec(), &delta, 1.0, egui::Color32::BLACK, 1.0, &native).unwrap().is_some());
         assert!(
-            !gpu.render([8, 8], primitives.to_vec(), &egui::TexturesDelta::default(), 1.0, egui::Color32::BLACK).unwrap(),
+            gpu.render([8, 8], primitives.to_vec(), &egui::TexturesDelta::default(), 1.0, egui::Color32::BLACK, 1.0, &native).unwrap().is_none(),
             "identical frame needs no submission or readback"
         );
         assert!(
-            gpu.render([8, 8], primitives.to_vec(), &delta, 1.0, egui::Color32::BLACK).unwrap(),
+            gpu.render([8, 8], primitives.to_vec(), &delta, 1.0, egui::Color32::BLACK, 1.0, &native).unwrap().is_some(),
             "a texture update must redraw even with identical geometry"
         );
         cpu.render([8, 8], &primitives, 1.0, egui::Color32::BLACK);
-        assert_eq!(gpu.pixels(), cpu.pixels(), "native BGRA readback matches CPU presentation");
-        assert_eq!(gpu.image().pixels, cpu.image().pixels, "screenshots preserve the presented colors");
+        assert_eq!(native.0.lock().unwrap().as_slice(), cpu.pixels(), "native BGRA readback matches CPU presentation");
+        assert_eq!(gpu.image().unwrap().pixels, cpu.image().pixels, "screenshots preserve the presented colors");
         delta.clear();
         let health = gpu.health.clone();
         gpu.state.device.destroy();

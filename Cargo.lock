@@ -3814,7 +3814,9 @@ dependencies = [
 name = "lightcraft-haiku-host"
 version = "0.15.0"
 dependencies = [
+ "ash",
  "cc",
+ "wgpu",
 ]
 
 [[package]]
