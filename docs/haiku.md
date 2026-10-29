@@ -229,8 +229,12 @@ reports `B_ALREADY_RUNNING`). The running copy imports them as the desktop app
 imports its launch arguments (`launch_imports`, then the import into the open
 library; while the library chooser is open they wait for the chosen library),
 and its window comes to the front. A launch without files only brings the
-window up. A test copy that must run beside the installed one runs from a file
-of its own.
+window up, un-minimized (`B_SILENT_RELAUNCH`, which `BApplication` alone
+answers by activating the team, leaving a minimized window down). The copy's
+own arguments, which `BApplication` posts to itself before `B_READY_TO_RUN`
+without a reply address (so `IsSourceRemote()` calls them remote), are ignored
+in `ArgvReceived`: the Rust side has already imported them. A test copy that
+must run beside the installed one runs from a file of its own.
 
 ## Tracker, GPU loss, HDR and cameras
 
