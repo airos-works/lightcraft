@@ -373,7 +373,8 @@ impl Shell {
             wheel_phase::ENDED => {
                 // egui drops a gesture's unapplied deltas at its end: one that ends in the same
                 // frame as its last movement ends in the next.
-                let moved = self.events.iter().any(|e| matches!(e, Event::MouseWheel { source: MouseWheelSource::Trackpad, phase: TouchPhase::Move, .. }));
+                let moved =
+                    self.events.iter().any(|e| matches!(e, Event::MouseWheel { source: MouseWheelSource::Trackpad, phase: TouchPhase::Move, .. }));
                 if moved {
                     self.wheel_end = Some(modifiers);
                 } else {
