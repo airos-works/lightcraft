@@ -85,6 +85,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["meta", "develop"],
     &["develop", "scenes"],
     &["codecs", "raw"],
+    // air/OS: AI masks' image encoder runs on `gpu`'s wgpu device (segment feature `wgpu`, issue #5)
+    &["gpu", "segment"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

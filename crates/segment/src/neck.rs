@@ -11,6 +11,9 @@ use candle_nn::{Conv2d, Conv2dConfig, ConvTranspose2d, ConvTranspose2dConfig, Va
 use crate::Result;
 use crate::vit::HIDDEN;
 
+#[cfg(feature = "wgpu")]
+mod gpu;
+
 pub const FPN: usize = 256;
 
 enum Scale {
@@ -30,6 +33,9 @@ struct Level {
 
 pub struct Neck {
     levels: Vec<Level>,
+    /// The levels on the GPU (feature `wgpu`), when attached.
+    #[cfg(feature = "wgpu")]
+    gpu: Option<lightcraft_gpu::sam::Neck>,
 }
 
 impl Neck {
@@ -57,11 +63,19 @@ impl Neck {
                 proj2: candle_nn::conv2d(FPN, FPN, 3, Conv2dConfig { padding: 1, ..Default::default() }, l.pp("proj2"))?,
             });
         }
-        Ok(Self { levels })
+        Ok(Self {
+            levels,
+            #[cfg(feature = "wgpu")]
+            gpu: None,
+        })
     }
 
     /// `x`: the backbone's `[1, 1024, 72, 72]`; `n`: how many levels (from the finest) to compute.
     pub fn forward(&self, x: &Tensor, n: usize) -> Result<Vec<Tensor>> {
+        #[cfg(feature = "wgpu")]
+        if let Some(levels) = self.forward_gpu(x, n) {
+            return Ok(levels);
+        }
         let mut out = Vec::with_capacity(n);
         for l in self.levels.iter().take(n) {
             let y = match &l.scale {

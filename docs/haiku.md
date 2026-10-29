@@ -288,3 +288,74 @@ layout (`lc_host_displays`: connector, EDID name, vendor, serial number, frame),
 or `BScreen::GetMonitorInfo` on plain Haiku. Choose Profile… starts in
 `ColorProfiles` (`display_profile_dir`, which also knows
 `~/config/non-packaged/data/color/icc` and `/boot/system/data/color/icc`).
+
+## AI masks and AI Denoise on the GPU (issue #5, 2026-10-29)
+
+candle, which upstream's SAM 3 port (`crates/segment`) runs on, has a GPU path only
+through Metal, so AI masks ran entirely on the processor here. With the
+`lightcraft-segment/wgpu` feature (engine feature `sam-gpu`, on in the air/OS
+build) the heavy parts run on the same wgpu/Vulkan device type the photo pipeline
+uses, as WGSL compute kernels in `crates/gpu/src/sam/` (`wgsl/sam_gemm.wgsl`,
+`wgsl/sam_ops.wgsl`):
+
+- the 32-layer image encoder (ViT with windowed and global attention, rotary
+  position encoding; about 5.4 TFLOP per photo, nearly all of an AI mask's work);
+- the feature pyramid (neck) of the click decoder and of the text detector;
+- the text detector's DETR encoder (5184 image tokens attending to themselves and
+  to the prompt) and its pixel decoder (3 × 3 convolutions, group norms, the
+  200 per-query masks).
+
+The click prompt encoder and two-way mask decoder, the CLIP text encoder, the DETR
+decoder (200 queries with box refinement and box-relative attention bias) and the
+scoring stay on candle's CPU path: together about 1 s of a click and 5 s of a
+Describe prompt, spread over many small operations. candle's model stays the
+reference and the fallback. A part whose kernels or buffers cannot be set up (no
+Vulkan, a software adapter, too little memory, `LIGHTCRAFT_GPU=0`,
+`LIGHTCRAFT_GPU_BACKEND=off`, the GPU preference off) runs on the CPU; a run that
+fails (device error or loss, values that are not finite) is redone on the CPU and
+the AI mask device is not used again until LightCraft restarts. Each kernel is
+checked against plain loops on small inputs when the device is first set up.
+`LIGHTCRAFT_GPU_ADAPTER` picks the adapter as for denoise. The device holds about
+4 GB while SAM 3 is loaded (2.4 GB encoder weights and work buffers, 0.3 GB per
+neck, 0.9 GB for the detector parts) and frees it when the model is unloaded.
+The matrix-product kernel writes its accumulators out as named variables: NVK's
+compiler kept an indexed array of them in memory, which made it 20× slower.
+
+candle's CPU kernels also got slower with every thread past a few on air/OS, so the
+AI mask worker runs in a rayon pool of 4 threads there
+(`crates/engine/src/segment/worker.rs`, `POOL_THREADS`).
+
+AI Denoise already had a GPU path upstream (`crates/gpu/src/nn.rs`, the U-Net as
+WGSL convolutions, chosen per photo after a check tile agrees with the CPU and is
+timed against it); it runs on NVK unchanged.
+
+Measured on the X399 (Threadripper 1950X, GeForce GTX 1070 on NVK, hrev60207),
+SAM 3 `facebook/sam3` checkpoint, `crates/segment/examples/sam3_gpu_bench.rs`
+(a 1200 × 800 image) for the GPU columns and upstream's `sam3_bench` for the CPU:
+
+| AI masks | CPU (before) | GPU (after) |
+|---|---:|---:|
+| Model load (GPU: set-up and 2.4 GB upload) | 2.4 s | 6.2 s |
+| Image encoder, per photo | 310 s | 6.6 s |
+| Click features (neck), per photo | 8.2 s | 1.2 s |
+| A click | 1.3 s | 0.6 s |
+| A Describe prompt on a new photo (detector neck and prediction) | 86 s | 6.8 s |
+
+In the app, the first click on a 24 MP Sony A7 III raw (encode at 1008 × 672 and the
+click features) took 8.4 s and each later click about 1.3 s; a Describe prompt took
+6.3 s. The encoder's output differs from candle's CPU encoder by at most 1.3e-4 of
+its largest value; the one- and two-click masks cut from either were identical and a
+"sky" Describe mask differed in 0.001 % of its pixels (`tests/it/gpu.rs`, on the X399).
+
+| AI Denoise (RawNIND Bayer, a7 III raw, 35 tiles) | CPU | GPU |
+|---|---:|---:|
+| One 512-cell tile | 2472 ms | 158 ms |
+| Whole photo, model stage (16 CPU / 4 GPU workers) | 39.2 s | 7.6 s |
+
+Tests: `LIGHTCRAFT_SAM_GPU_SOFTWARE=1 cargo test -p lightcraft-gpu --features sam`
+runs the kernel, encoder, neck, DETR encoder, pixel decoder and device-loss tests on
+a software adapter (lavapipe) against plain-loop references; on air/OS they run on
+the GPU. With the model, `LIGHTCRAFT_SAM3_DIR=<dir> [LC_SAM3_GPU_TEXT=1] cargo
+test -p lightcraft-segment --features wgpu --release --test it gpu` compares the GPU
+and CPU paths end to end. The denoise numbers come from upstream's
+`denoise_cpu::denoise_stage_compares_cpu_and_gpu` engine test.

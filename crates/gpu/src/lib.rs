@@ -43,6 +43,9 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+// air/OS (issue #5): SAM 3 (AI masks) on the GPU
+#[cfg(all(feature = "sam", not(target_arch = "wasm32")))]
+pub mod sam;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::GpuStages;

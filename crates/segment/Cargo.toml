@@ -19,11 +19,19 @@ log = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 lightcraft-fetch = { workspace = true }
+lightcraft-gpu = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }
 candle-nn = { workspace = true, features = ["metal"] }
 
+[features]
+default = []
+# The image encoder on the GPU through wgpu (Vulkan/DX12/Metal) where candle has no GPU path (air/OS, issue #5).
+wgpu = ["dep:lightcraft-gpu", "lightcraft-gpu/sam"]
+
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# the GPU benchmark's thread pool (examples/sam3_gpu_bench.rs)
+rayon = { workspace = true }

@@ -14,6 +14,9 @@ use crate::neck::{FPN, Neck};
 use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
 use crate::{Error, Prediction, Result};
 
+#[cfg(feature = "wgpu")]
+mod gpu;
+
 const HIDDEN: usize = FPN;
 const HEADS: usize = 8;
 const QUERIES: usize = 200;
@@ -96,6 +99,9 @@ pub struct Detector {
     instance_proj: Conv2d,
     semantic_proj: Conv2d,
     mask_embedder: Vec<Linear>,
+    /// The DETR encoder and the pixel decoder on the GPU (feature `wgpu`), when attached.
+    #[cfg(feature = "wgpu")]
+    gpu: Option<gpu::Parts>,
 }
 
 impl Detector {
@@ -161,6 +167,8 @@ impl Detector {
             instance_proj: candle_nn::conv2d(HIDDEN, HIDDEN, 1, Conv2dConfig::default(), m.pp("instance_projection"))?,
             semantic_proj: candle_nn::conv2d(HIDDEN, 1, 1, Conv2dConfig::default(), m.pp("semantic_projection"))?,
             mask_embedder: (0..3).map(|i| linear(HIDDEN, HIDDEN, m.pp(format!("mask_embedder.layers.{i}")))).collect::<Result<_>>()?,
+            #[cfg(feature = "wgpu")]
+            gpu: None,
         })
     }
 
@@ -214,8 +222,14 @@ impl Detector {
         let text_bias = padding_bias(valid, &self.device)?;
 
         // DETR encoder: image tokens attend to themselves and to the prompt
-        let mut x = f.flat.clone();
-        for l in &self.encoder {
+        #[cfg(feature = "wgpu")]
+        let (mut x, layers) = match self.encoder_gpu(f, &text, valid) {
+            Some(memory) => (memory, &self.encoder[..0]),
+            None => (f.flat.clone(), &self.encoder[..]),
+        };
+        #[cfg(not(feature = "wgpu"))]
+        let (mut x, layers) = (f.flat.clone(), &self.encoder[..]);
+        for l in layers {
             let h = l.ln1.forward(&x)?;
             let hp = (&h + &f.pos)?;
             x = (&x + l.self_attn.forward(&hp, &hp, &h, None)?)?;
@@ -262,6 +276,12 @@ impl Detector {
 
         // masks: the encoder memory attends to the prompt, then a pixel decoder up to 288²
         let mem = (&memory + self.prompt_attn.forward(&self.prompt_ln.forward(&memory)?, &text, &text, Some(&text_bias))?)?;
+        #[cfg(feature = "wgpu")]
+        if let Some((masks, semantic)) = self.masks_gpu(f, &mem, &queries) {
+            let bv = to_vec(&cxcywh_to_xyxy(&boxes)?)?;
+            let presence = to_vec(&presence)?.first().copied().unwrap_or(-10.0);
+            return Ok(Output { masks, logits: to_vec(&logits)?, presence, boxes: bv.as_chunks::<4>().0.to_vec(), text, semantic });
+        }
         let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
         let mut prev = mem.transpose(1, 2)?.reshape((1, HIDDEN, f.side, f.side))?;
         for (i, skip) in [l1, l0].into_iter().enumerate() {

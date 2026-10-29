@@ -237,7 +237,7 @@ impl Worker {
         // (re)start the thread
         let (tx, rx) = mpsc::channel();
         let shared = self.shared.clone();
-        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial())) {
+        match std::thread::Builder::new().name("sam3".into()).spawn(move || in_pool(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial()))) {
             Ok(t) => {
                 self.thread = Some(t);
                 self.tx = Some(tx.clone());
@@ -249,6 +249,25 @@ impl Worker {
             }
         }
     }
+}
+
+/// Threads the model's CPU work runs on on air/OS: candle's CPU kernels there got slower with every thread past a few
+/// (the text detector's CPU parts took 6.8 s on 4 threads, 7.2 s on 8, 10.5 s on 16 and 18 s on all 32 of a
+/// Threadripper 1950X), so the worker runs in a small pool of its own (issue #5).
+#[cfg(target_os = "haiku")]
+const POOL_THREADS: usize = 4;
+
+/// Run `f` (the worker) in its own thread pool where the model's CPU work wants one ([`POOL_THREADS`]).
+fn in_pool(f: impl FnOnce() + Send) {
+    #[cfg(target_os = "haiku")]
+    {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(POOL_THREADS);
+        match rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("sam3 cpu {i}")).build() {
+            Ok(pool) => return pool.install(f),
+            Err(e) => log::warn!("SAM 3 runs in the shared thread pool: {e}"),
+        }
+    }
+    f()
 }
 
 /// The model and the last encoded photo.
@@ -364,7 +383,12 @@ fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, place
             Placement::Gpu => Sam3::load(dir)?,
             Placement::Cpu => Sam3::load_cpu(dir)?,
         };
-        log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        let on = match m.encoder_gpu() {
+            Ok(gpu) => format!("image encoder on {gpu}"),
+            Err(_) if m.device().is_cpu() => "CPU".into(),
+            Err(_) => "GPU".into(),
+        };
+        log::info!("SAM 3 loaded in {:?} ({on})", t.elapsed());
         state.model = Some((dir.to_path_buf(), m));
         shared.loaded.store(true, Ordering::SeqCst);
     }

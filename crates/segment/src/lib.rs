@@ -32,6 +32,8 @@ mod clip;
 mod detector;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fetch;
+#[cfg(all(feature = "wgpu", not(target_arch = "wasm32")))]
+mod gpu;
 pub mod mask;
 #[cfg(not(target_arch = "wasm32"))]
 mod neck;
@@ -88,9 +90,9 @@ pub fn is_model_dir(dir: &Path) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Whether [`best_device`] can be a GPU in this build (Metal on macOS). Where it can, a caller that
-/// sees the model fail there can load it again with [`Sam3::load_cpu`].
-pub const GPU_BUILD: bool = cfg!(target_os = "macos");
+/// Whether [`Sam3::load`] can use a GPU in this build (Metal on macOS; the image encoder through wgpu with the
+/// `wgpu` feature). Where it can, a caller that sees the model fail there can load it again with [`Sam3::load_cpu`].
+pub const GPU_BUILD: bool = cfg!(target_os = "macos") || cfg!(feature = "wgpu");
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU.
@@ -108,7 +110,10 @@ pub struct Sam3 {
     dir: PathBuf,
     device: Device,
     weights: Arc<weights::Weights>,
-    backbone: vit::Vit,
+    /// candle's encoder: built at load, or when the GPU encoder can't run (feature `wgpu`).
+    backbone: std::sync::OnceLock<vit::Vit>,
+    #[cfg(feature = "wgpu")]
+    gpu: gpu::Slot,
     tracker_neck: Option<neck::Neck>,
     tracker: Option<tracker::Tracker>,
     detector: Option<detector::Detector>,
@@ -136,6 +141,16 @@ impl Sam3 {
     /// Load from a directory holding `model.safetensors` (the `facebook/sam3` checkpoint in
     /// Hugging Face format), `vocab.json` and `merges.txt`.
     pub fn load(dir: &Path) -> Result<Self> {
+        #[cfg(all(feature = "wgpu", not(target_os = "macos")))]
+        {
+            let mut m = Self::open(dir, Device::Cpu, false)?;
+            m.gpu = gpu::Slot::load(&m.weights);
+            if m.gpu.adapter().is_err() {
+                m.cpu_backbone()?;
+            }
+            Ok(m)
+        }
+        #[cfg(not(all(feature = "wgpu", not(target_os = "macos"))))]
         Self::load_on(dir, best_device())
     }
 
@@ -145,12 +160,48 @@ impl Sam3 {
     }
 
     pub fn load_on(dir: &Path, device: Device) -> Result<Self> {
+        Self::open(dir, device, true)
+    }
+
+    /// The model in `dir`, with candle's encoder built now (`backbone`) or when first needed.
+    fn open(dir: &Path, device: Device, backbone: bool) -> Result<Self> {
         if !is_model_dir(dir) {
             return Err(Error::Missing(dir.to_path_buf()));
         }
         let weights = weights::Weights::open(&dir.join(WEIGHTS_FILE))?;
-        let backbone = vit::Vit::new(Self::vb(&weights, &device).pp("detector_model.vision_encoder.backbone"))?;
-        Ok(Self { dir: dir.to_path_buf(), device, weights, backbone, tracker_neck: None, tracker: None, detector: None, tokenizer: None })
+        let m = Self {
+            dir: dir.to_path_buf(),
+            device,
+            weights,
+            backbone: std::sync::OnceLock::new(),
+            #[cfg(feature = "wgpu")]
+            gpu: gpu::Slot::default(),
+            tracker_neck: None,
+            tracker: None,
+            detector: None,
+            tokenizer: None,
+        };
+        if backbone {
+            m.cpu_backbone()?;
+        }
+        Ok(m)
+    }
+
+    /// candle's encoder, built on first use.
+    fn cpu_backbone(&self) -> Result<&vit::Vit> {
+        if let Some(b) = self.backbone.get() {
+            return Ok(b);
+        }
+        let b = vit::Vit::new(Self::vb(&self.weights, &self.device).pp("detector_model.vision_encoder.backbone"))?;
+        Ok(self.backbone.get_or_init(|| b))
+    }
+
+    /// The GPU the image encoder runs on through wgpu (feature `wgpu`), or why it runs with the rest of the model.
+    pub fn encoder_gpu(&self) -> std::result::Result<String, String> {
+        #[cfg(feature = "wgpu")]
+        return self.gpu.adapter();
+        #[cfg(not(feature = "wgpu"))]
+        Err("this build has no wgpu image encoder".into())
     }
 
     fn vb<'a>(w: &Arc<weights::Weights>, device: &Device) -> VarBuilder<'a> {
@@ -171,12 +222,22 @@ impl Sam3 {
 
     /// Run the backbone on preprocessed pixels `[1, 3, 1008, 1008]` (−1..1).
     pub fn encode_pixels(&self, pixels: &Tensor) -> Result<Encoded> {
-        Ok(Encoded { backbone: self.backbone.forward(&pixels.to_device(&self.device)?)?, tracker: None, detector: None })
+        #[cfg(feature = "wgpu")]
+        if let Some(backbone) = self.gpu.encode(pixels) {
+            return Ok(Encoded { backbone, tracker: None, detector: None });
+        }
+        Ok(Encoded { backbone: self.cpu_backbone()?.forward(&pixels.to_device(&self.device)?)?, tracker: None, detector: None })
     }
 
     fn tracker_parts(&mut self) -> Result<(&neck::Neck, &tracker::Tracker)> {
         if self.tracker_neck.is_none() {
-            self.tracker_neck = Some(neck::Neck::new(Self::vb(&self.weights, &self.device).pp("tracker_neck"))?);
+            #[allow(unused_mut)]
+            let mut neck = neck::Neck::new(Self::vb(&self.weights, &self.device).pp("tracker_neck"))?;
+            #[cfg(feature = "wgpu")]
+            if self.gpu.adapter().is_ok() {
+                neck.attach_gpu(&Self::vb(&self.weights, &self.device).pp("tracker_neck"), 3);
+            }
+            self.tracker_neck = Some(neck);
         }
         if self.tracker.is_none() {
             self.tracker = Some(tracker::Tracker::new(Self::vb(&self.weights, &self.device).pp("tracker_model"))?);
@@ -215,7 +276,13 @@ impl Sam3 {
 
     fn detector_parts(&mut self) -> Result<(&detector::Detector, &tokenizer::Tokenizer)> {
         if self.detector.is_none() {
-            self.detector = Some(detector::Detector::new(Self::vb(&self.weights, &self.device).pp("detector_model"))?);
+            #[allow(unused_mut)]
+            let mut det = detector::Detector::new(Self::vb(&self.weights, &self.device).pp("detector_model"))?;
+            #[cfg(feature = "wgpu")]
+            if self.gpu.adapter().is_ok() {
+                det.attach_gpu(&Self::vb(&self.weights, &self.device).pp("detector_model"));
+            }
+            self.detector = Some(det);
         }
         if self.tokenizer.is_none() {
             self.tokenizer = Some(tokenizer::Tokenizer::load(&self.dir)?);

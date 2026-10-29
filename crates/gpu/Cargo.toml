@@ -28,6 +28,8 @@ bytemuck = { workspace = true }
 [features]
 default = []
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
+# The SAM 3 image encoder (AI masks) on the GPU; `lightcraft-segment` turns it on with its `wgpu` feature.
+sam = []
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)

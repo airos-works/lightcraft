@@ -26,7 +26,7 @@ const EPS: f64 = 1e-6;
 
 /// Cosine and sine tables `[N, head_dim]` for a `side × side` grid whose coordinates are scaled
 /// by `scale` (`Sam3ViTRotaryEmbedding`: x frequencies then y, each duplicated pairwise).
-fn rope_tables(side: usize, scale: f64, device: &Device) -> Result<(Tensor, Tensor)> {
+pub(crate) fn rope_tables(side: usize, scale: f64, device: &Device) -> Result<(Tensor, Tensor)> {
     let spatial = HEAD_DIM / 2;
     let inv: Vec<f64> = (0..spatial).step_by(2).map(|i| 1.0 / 10000f64.powf(i as f64 / spatial as f64)).collect();
     let n = side * side;
