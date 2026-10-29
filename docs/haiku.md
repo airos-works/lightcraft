@@ -199,3 +199,18 @@ that SoftwareUpdater installs newer versions, as the web build says it can't
 check. The start-up check stays off. The community links (Help ▸ Join the
 ArtCraft Discord, the About dialog's button) stay: they open the web browser,
 and upstream has no switch a host could set.
+
+## Touchpad scrolling
+
+air/OS's mouse add-on marks a touchpad's scroll gesture (since 2026-10-27,
+`docs/airos/TOUCHPAD-SCROLLING.md` in the haiku tree): `be:wheel_precise_delta_x/y`
+(unrounded wheel steps) and `be:wheel_phase` (began, changed, ended). The host
+turns those into egui's `MouseWheelSource::Trackpad` events in points (a step
+is egui's line, `InputOptions::line_scroll_speed`, which LightCraft sets to
+100 points), with `TouchPhase::Start` at the first message and `End` when the
+fingers lift, so the grid, filmstrip and panels follow the fingers instead of
+jumping a third of the grid per step. egui drops a gesture's unapplied deltas
+at its end, so an end that arrives in the same frame as the last movement is
+held for the next frame. A mouse wheel (no precise deltas) still sends whole
+lines from a wheel, which the grid turns into its Lightroom-style page steps.
+air/OS has no pinch gesture: Command+wheel and the zoom controls zoom.

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Theme, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo, pos2, vec2};
 use lightcraft_ui_egui::LightcraftApp;
 
-use crate::host::{self, RawEvent, WindowCommand, kind};
+use crate::host::{self, RawEvent, WindowCommand, kind, wheel_phase};
 use crate::keys;
 use crate::raster::Rasterizer;
 use crate::services;
@@ -34,6 +34,8 @@ pub struct Shell {
     modifiers: Modifiers,
     focused: bool,
     events: Vec<Event>,
+    /// A touchpad gesture's end held back for the next frame (its modifiers), see [`Self::wheel`].
+    wheel_end: Option<Modifiers>,
     close_requested: bool,
     quit: bool,
     /// When egui wants the next frame (from this thread's frames).
@@ -155,6 +157,7 @@ impl Shell {
             modifiers: Modifiers::default(),
             focused: true,
             events: Vec::new(),
+            wheel_end: None,
             close_requested: false,
             quit: false,
             repaint_at: Some(Instant::now()),
@@ -253,6 +256,16 @@ impl Shell {
     /// panel was open. Whether there were any.
     fn drain(&mut self) -> bool {
         let mut any = false;
+        if let Some(modifiers) = self.wheel_end.take() {
+            any = true;
+            self.events.push(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::Vec2::ZERO,
+                phase: egui::TouchPhase::End,
+                source: egui::MouseWheelSource::Trackpad,
+                modifiers,
+            });
+        }
         for (ev, text) in services::take_deferred() {
             any = true;
             self.event(ev, text);
@@ -283,14 +296,7 @@ impl Shell {
             kind::POINTER_GONE => self.events.push(Event::PointerGone),
             kind::WHEEL => {
                 self.set_modifiers(ev.modifiers);
-                self.events.push(Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Line,
-                    delta: vec2(-ev.dx, -ev.dy),
-                    phase: egui::TouchPhase::Move,
-                    // B_MOUSE_WHEEL_CHANGED doesn't say whether a wheel or a touchpad sent it
-                    source: egui::MouseWheelSource::Unknown,
-                    modifiers: self.modifiers,
-                });
+                self.wheel(&ev);
             }
             kind::KEY_DOWN | kind::KEY_UP => self.key(ev.kind == kind::KEY_DOWN, ev.key, ev.raw_char, ev.modifiers, &text),
             kind::MODIFIERS => self.set_modifiers(host::modifiers()),
@@ -322,6 +328,51 @@ impl Shell {
             kind::RESIZED | kind::MOVED | kind::MINIMIZED => {}
             // A panel's answer after its caller stopped waiting has nobody to go to.
             _ => {}
+        }
+    }
+
+    /// A wheel turn, or a step of an air/OS touchpad's scroll gesture: its precise deltas (wheel
+    /// steps, unrounded) become points at egui's line scroll speed, with the gesture's phases,
+    /// so the grid and panels follow the fingers 1:1 and egui's scroll areas treat it as a
+    /// trackpad. A wheel's whole steps stay lines.
+    fn wheel(&mut self, ev: &RawEvent) {
+        use egui::{MouseWheelSource, MouseWheelUnit, TouchPhase};
+        let modifiers = self.modifiers;
+        // `repeat`: precise deltas (`be:wheel_precise_delta_*`), `clicks`: `be:wheel_phase`.
+        if ev.repeat == 0 {
+            // A mouse wheel (B_MOUSE_POINTING_DEVICE), or a system without touchpad gestures.
+            self.events.push(Event::MouseWheel {
+                unit: MouseWheelUnit::Line,
+                delta: vec2(-ev.dx, -ev.dy),
+                phase: TouchPhase::Move,
+                source: MouseWheelSource::Wheel,
+                modifiers,
+            });
+            return;
+        }
+        let event = |unit, delta, phase| Event::MouseWheel { unit, delta, phase, source: MouseWheelSource::Trackpad, modifiers };
+        let line = self.ctx.options(|o| o.input_options.line_scroll_speed);
+        let delta = vec2(-ev.dx, -ev.dy) * line;
+        let delta = if delta.is_finite() { delta } else { egui::Vec2::ZERO };
+        match ev.clicks {
+            wheel_phase::BEGAN => {
+                self.events.push(event(MouseWheelUnit::Point, egui::Vec2::ZERO, TouchPhase::Start));
+            }
+            wheel_phase::ENDED => {
+                // egui drops a gesture's unapplied deltas at its end: one that ends in the same
+                // frame as its last movement ends in the next.
+                let moved = self.events.iter().any(|e| matches!(e, Event::MouseWheel { source: MouseWheelSource::Trackpad, phase: TouchPhase::Move, .. }));
+                if moved {
+                    self.wheel_end = Some(modifiers);
+                } else {
+                    self.events.push(event(MouseWheelUnit::Point, egui::Vec2::ZERO, TouchPhase::End));
+                }
+                return;
+            }
+            _ => {}
+        }
+        if delta != egui::Vec2::ZERO {
+            self.events.push(event(MouseWheelUnit::Point, delta, TouchPhase::Move));
         }
     }
 
@@ -535,7 +586,7 @@ impl Shell {
             self.ppp = ppp;
             delay = Duration::ZERO;
         }
-        if !self.events.is_empty() {
+        if !self.events.is_empty() || self.wheel_end.is_some() {
             delay = Duration::ZERO;
         }
         self.app.perf.host_frame_ms = Some(t0.elapsed().as_secs_f64() * 1e3);

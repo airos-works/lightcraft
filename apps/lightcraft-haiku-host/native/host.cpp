@@ -379,9 +379,25 @@ public:
 		switch (message->what) {
 			case B_MOUSE_WHEEL_CHANGED:
 			{
+				// A wheel's whole steps, or a touchpad's scroll gesture
+				// (air/OS): its unrounded steps, and the gesture's phase in
+				// clicks (1 began, 2 changed, 3 ended). id is the device's
+				// subtype (2: touchpad), repeat 1 for the precise deltas.
 				LcEvent event = MakeEvent(LC_WHEEL);
-				message->FindFloat("be:wheel_delta_x", &event.dx);
-				message->FindFloat("be:wheel_delta_y", &event.dy);
+				message->FindInt32("be:device_subtype", &event.id);
+				float dx, dy;
+				int32 phase;
+				if (message->FindInt32("be:wheel_phase", &phase) == B_OK
+					&& message->FindFloat("be:wheel_precise_delta_x", &dx) == B_OK
+					&& message->FindFloat("be:wheel_precise_delta_y", &dy) == B_OK) {
+					event.dx = dx;
+					event.dy = dy;
+					event.clicks = phase;
+					event.repeat = 1;
+				} else {
+					message->FindFloat("be:wheel_delta_x", &event.dx);
+					message->FindFloat("be:wheel_delta_y", &event.dy);
+				}
 				Push(event);
 				break;
 			}

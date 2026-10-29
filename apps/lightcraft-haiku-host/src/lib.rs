@@ -39,6 +39,13 @@ struct RawWindowInfo {
     fullscreen: i32,
 }
 
+/// `be:wheel_phase` of an air/OS touchpad's scroll gesture (`input_wheel_phase` in `<Input.h>`),
+/// a [`kind::WHEEL`] event's `clicks`.
+pub mod wheel_phase {
+    pub const BEGAN: i32 = 1;
+    pub const ENDED: i32 = 3;
+}
+
 /// The kinds of [`RawEvent`].
 pub mod kind {
     pub const MOUSE_MOVED: i32 = 1;
