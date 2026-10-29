@@ -108,6 +108,12 @@ fn native_main() -> Result<(), String> {
             _ => files.push(arg),
         }
     }
+    // Before the log file, the preferences, the GPU markers or the library are touched: a second
+    // launch (from Terminal; Tracker hands files to the running copy itself) passes its files
+    // and folders to the running copy, which imports them, and ends.
+    if host::init(services::SIGNATURE)? == host::Launch::HandedOver {
+        return Ok(());
+    }
     let mut log_file = None;
     if let Some(logger) = logger {
         match log_dir().filter(|_| !in_memory) {
@@ -145,7 +151,6 @@ fn native_main() -> Result<(), String> {
     if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(workers).build_global() {
         log::warn!("Worker pool: {e}");
     }
-    host::init(services::SIGNATURE)?;
     let scale = host::ui_scale();
     let window = prefs.as_ref().and_then(|u| u.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
     let size = window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size);

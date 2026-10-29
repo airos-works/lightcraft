@@ -309,15 +309,19 @@ impl Shell {
                 }
             }
             kind::CLOSE | kind::QUIT_REQUESTED => self.close_requested = true,
-            // Tracker's Open, Open With and drops on the icon, and files dropped on the
-            // window: import through the same full library path as the desktop app.
+            // Tracker's Open, Open With and drops on the icon, the files and folders of a later
+            // launch (one copy runs: B_SINGLE_LAUNCH; already absolute) and files dropped on the
+            // window: import through the same full library path as the desktop app's launch
+            // arguments. A later launch without any only brings the window to the front.
             kind::OPEN_FILES | kind::DROPPED_FILES => {
                 let paths = text.lines().filter(|p| !p.is_empty()).map(str::to_owned).collect::<Vec<_>>();
                 let (paths, notices) = crate::desktop::launch_imports(&paths);
                 self.app.notices.extend(notices);
                 if let Some(problem) = self.app.library_problem.as_mut() {
                     problem.pending_import.extend(paths);
-                } else if let Err(e) = lightcraft_ui_egui::import::start_paths(&mut self.app, paths) {
+                } else if !paths.is_empty()
+                    && let Err(e) = lightcraft_ui_egui::import::start_paths(&mut self.app, paths)
+                {
                     self.app.notices.push(e);
                 }
                 host::window_command(WindowCommand::Activate);

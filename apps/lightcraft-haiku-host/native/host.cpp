@@ -750,9 +750,9 @@ AnswerDialog(int32 id, bool picked, const std::string& path)
 
 class LcApp : public BApplication {
 public:
-	LcApp(const char* signature)
+	LcApp(const char* signature, status_t* error)
 		:
-		BApplication(signature)
+		BApplication(signature, error)
 	{
 	}
 
@@ -773,7 +773,43 @@ public:
 
 	virtual void ArgvReceived(int32 argc, char** argv)
 	{
-		// The Rust side reads its own command line.
+		// The Rust side reads its own command line. Another launch's, handed
+		// over as this copy is already running (B_SINGLE_LAUNCH), imports its
+		// files and folders here: the arguments that aren't options (nor an
+		// option's value), relative to the folder it was started in.
+		BMessage* message = CurrentMessage();
+		if (message == NULL || !message->IsSourceRemote())
+			return;
+		const char* cwd = NULL;
+		message->FindString("cwd", &cwd);
+		std::string paths;
+		for (int32 i = 1; i < argc; i++) {
+			if (strcmp(argv[i], "--control") == 0
+				|| strcmp(argv[i], "--library") == 0) {
+				i++;
+				continue;
+			}
+			if (argv[i][0] == '-' && argv[i][1] != '\0')
+				continue;
+			// Not normalized: the Rust side reports a path that doesn't
+			// exist, as for its own launch.
+			BPath path;
+			if (argv[i][0] != '/' && cwd != NULL)
+				path.SetTo(cwd, argv[i], false);
+			else
+				path.SetTo(argv[i], NULL, false);
+			if (path.InitCheck() != B_OK)
+				continue;
+			if (!paths.empty())
+				paths += '\n';
+			paths += path.Path();
+		}
+		// Even without files: the running copy's window comes to the front,
+		// as BApplication does for a launch without arguments
+		// (B_SILENT_RELAUNCH).
+		LcEvent event = MakeEvent(LC_OPEN_FILES);
+		event.text_len = paths.size();
+		Push(event, paths);
 	}
 
 	virtual bool QuitRequested()
@@ -838,13 +874,20 @@ CopyOut(const void* data, size_t length, size_t* _length)
 extern "C" {
 
 
+// Creates the application: 0, 1 when a copy started from the same file is
+// already running (B_SINGLE_LAUNCH) and has been handed this launch's
+// arguments, or -1.
 int32_t
 lc_host_init(const char* signature)
 {
 	if (be_app != NULL)
 		return 0;
-	new LcApp(signature);
-	return be_app != NULL && be_app->InitCheck() == B_OK ? 0 : -1;
+	// Not deleted when it failed: the process ends.
+	status_t error = B_OK;
+	new LcApp(signature, &error);
+	if (error == B_ALREADY_RUNNING)
+		return 1;
+	return error == B_OK && be_app != NULL ? 0 : -1;
 }
 
 

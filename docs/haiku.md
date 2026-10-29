@@ -214,3 +214,20 @@ at its end, so an end that arrives in the same frame as the last movement is
 held for the next frame. A mouse wheel (no precise deltas) still sends whole
 lines from a wheel, which the grid turns into its Lightroom-style page steps.
 air/OS has no pinch gesture: Command+wheel and the zoom controls zoom.
+
+## One running copy
+
+LightCraft is `B_SINGLE_LAUNCH` (`LightCraft.rdef`): one copy runs from each
+executable file, as the library has one writer. Photos and folders opened in
+Tracker while it runs (double-click, Open With, drops on its icon) arrive in
+the running copy as `B_REFS_RECEIVED`, and a launch from Terminal
+(`LightCraft ~/Pictures/trip`) hands its arguments to it (`B_ARGV_RECEIVED`,
+relative paths resolved against the launch's folder; options such as
+`--library`, `--memory` and `--control` are ignored) and ends before it touches
+the log file, the preferences, the GPU markers or the library (`BApplication`
+reports `B_ALREADY_RUNNING`). The running copy imports them as the desktop app
+imports its launch arguments (`launch_imports`, then the import into the open
+library; while the library chooser is open they wait for the chosen library),
+and its window comes to the front. A launch without files only brings the
+window up. A test copy that must run beside the installed one runs from a file
+of its own.

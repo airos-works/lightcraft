@@ -130,12 +130,23 @@ fn take_bytes(p: *mut c_void, len: usize) -> Option<Vec<u8>> {
     Some(v)
 }
 
+/// How [`init`] went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// This is the running copy.
+    Started,
+    /// A copy started from the same file is already running (`B_SINGLE_LAUNCH`); the system
+    /// handed it this launch's arguments, and this process only has to end.
+    HandedOver,
+}
+
 /// Creates the BApplication. Call once, on the main thread, before anything else here.
-pub fn init(signature: &str) -> Result<(), String> {
+pub fn init(signature: &str) -> Result<Launch, String> {
     let sig = c(signature);
     // SAFETY: a valid C string.
     match unsafe { lc_host_init(sig.as_ptr()) } {
-        0 => Ok(()),
+        0 => Ok(Launch::Started),
+        1 => Ok(Launch::HandedOver),
         e => Err(format!("the application couldn't start ({e})")),
     }
 }
