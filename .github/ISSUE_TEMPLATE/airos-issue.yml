@@ -1,0 +1,77 @@
+name: "Report a problem with LightCraft"
+description: "Something in LightCraft does not work as expected on airOS."
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem with LightCraft on airOS. A short, specific report is the most useful: what you did, what happened and what you expected.
+
+        This tracker is for the **airOS port**. If the problem also happens on other platforms, it may belong to the original project, [storytold/lightcraft](https://github.com/storytold/lightcraft/issues).
+
+        Please [search the existing issues](https://github.com/airos-works/lightcraft/issues?q=is%3Aissue) first, and leave out passwords, keys and personal details, including in logs and screenshots.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A brief description of the problem. Include the steps that lead to it, what you expected and what happened instead.
+      placeholder: |
+        1. Open …
+        2. Click …
+
+        Expected: …
+        Instead: …
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Hardware platform
+      description: The kind of machine you saw the problem on.
+      options:
+        - "x86-64 desktop PC"
+        - "x86-64 laptop"
+        - "Framework Laptop 13"
+        - "Radxa ROCK 5 ITX"
+        - "Radxa Dragon Q8B"
+        - "Raspberry Pi 4"
+        - "Radxa Cubie A7S"
+        - "Other ARM64 machine (UEFI)"
+        - "Virtual machine (QEMU, VirtualBox, VMware, …)"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware and airOS details
+      description: |
+        The machine or board model, processor, graphics, memory and any devices involved (a USB adapter, a display, a Wi-Fi card). For a driver problem, the matching lines from `listdev` (PCI) or `listusb` (USB) in Terminal help.
+
+        Which airOS you are running: paste the output of `cat /boot/system/data/airos/release`, or the name of the image you installed from.
+      placeholder: |
+        Machine: …
+        Processor and graphics: …
+        Memory: …
+        airOS release: …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: "LightCraft version"
+      description: From the app's About window, or the package file name (for example `name-1.2.0-3-x86_64.hpkg`). Say if it came with the airOS image.
+    validations:
+      required: false
+  - type: textarea
+    id: files
+    attributes:
+      label: Crash reports, logs and screenshots
+      description: |
+        Drag files into this box to attach them, or paste short logs as text. Useful files:
+
+        - **Crash report**: when an app crashes, choose **Save report** in the dialog that appears. The `.report` file is saved on your Desktop.
+        - **System log**: `/var/log/syslog`, especially for hardware, driver and start-up problems. Attach it soon after the problem happens.
+        - **Screenshots or a short screen recording**: press Print Screen, or use AirShot.
+      placeholder: Drag and drop files here.
+    validations:
+      required: false

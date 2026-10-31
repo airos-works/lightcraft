@@ -1,0 +1,20 @@
+# Builds the air/OS packages (x86_64 and arm64) on every push to main and publishes them to
+# the rolling "latest" release, with links in the README. The images build
+# LightCraft themselves at the commit pinned in airos-works/airos-ci
+# apps/media.lock.json, which must be on main. The pipeline itself lives in
+# airos-works/airos-ci (apps/build-app-packages.sh, build_lightcraft).
+name: air/OS build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  airos:
+    uses: airos-works/airos-ci/.github/workflows/app.yml@main
+    with:
+      app: lightcraft
+      repo-dir: lightcraft
+    permissions:
+      contents: write
