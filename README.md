@@ -70,14 +70,14 @@ This independent fork ports [LightCraft by the ArtCraft team](https://github.com
 <!-- airos-ci:latest-builds:start -->
 ## Latest builds
 
-Built automatically by air/OS CI from commit `cb900d9` on 2026-10-31 ([all files](https://github.com/airos-works/lightcraft/releases/tag/latest)).
+Built automatically by air/OS CI from commit `536632f` on 2026-11-03 ([all files](https://github.com/airos-works/lightcraft/releases/tag/latest)).
 
 | Architecture | Package |
 |---|---|
-| arm64 | [lightcraft-0.15.0.airos1-3-arm64.hpkg](https://github.com/airos-works/lightcraft/releases/download/latest/lightcraft-0.15.0.airos1-3-arm64.hpkg) |
-| x86_64 | [lightcraft-0.15.0.airos1-3-x86_64.hpkg](https://github.com/airos-works/lightcraft/releases/download/latest/lightcraft-0.15.0.airos1-3-x86_64.hpkg) |
+| arm64 | [lightcraft-0.18.0.airos1-1-arm64.hpkg](https://github.com/airos-works/lightcraft/releases/download/latest/lightcraft-0.18.0.airos1-1-arm64.hpkg) |
+| x86_64 | [lightcraft-0.18.0.airos1-1-x86_64.hpkg](https://github.com/airos-works/lightcraft/releases/download/latest/lightcraft-0.18.0.airos1-1-x86_64.hpkg) |
 
-Install with `pkgman install <file>`, or copy the file into `/boot/system/packages`. Haiku SDK: x86_64 hrev60207-2163-g761d19d6d1, arm64 hrev60207-2161-g9ce0b7382e.
+Install with `pkgman install <file>`, or copy the file into `/boot/system/packages`. Haiku SDK: x86_64 hrev60207-2447-gcbdd6fbb4a, arm64 hrev60207-2447-gcbdd6fbb4a.
 <!-- airos-ci:latest-builds:end -->
 
 ## Edit like you mean it
