@@ -3801,7 +3801,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-haiku"
-version = "0.15.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "egui",
@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-haiku-host"
-version = "0.15.0"
+version = "0.18.0"
 dependencies = [
  "ash",
  "cc",

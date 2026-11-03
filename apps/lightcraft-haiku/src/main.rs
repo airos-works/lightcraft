@@ -76,7 +76,7 @@ fn guard<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Stri
 }
 #[cfg(target_os = "haiku")]
 fn native_main() -> Result<(), String> {
-    use desktop::{HELP, control_port_from, launch_imports, log_dir, open_session, panic_log_path_with};
+    use desktop::{HELP, LaunchArgs, control_port_from, launch_imports, launch_library_choice, log_dir, open_session, panic_log_path_with};
     use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path};
     use prefs::{PrefsWriter, config_dir, load_prefs, prefs_path};
     host::export_vulkan_driver();
@@ -126,7 +126,11 @@ fn native_main() -> Result<(), String> {
             None => logger.no_file(),
         }
     }
-    let (files, launch_notices) = launch_imports(&files);
+    let LaunchArgs { files, library: launch_library, notices: launch_notices } = launch_imports(&files);
+    // a library opened from Tracker (its catalog.snap or folder) is the one that opens, not the last
+    // one used; --library and LIGHTCRAFT_LIBRARY still win
+    let env_library: Option<std::path::PathBuf> = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into);
+    let (library_dir, opened_by_argument) = launch_library_choice(library_dir, env_library.as_ref(), launch_library);
     let (prefs, prefs_warning, keep_prefs_file) = load_prefs(in_memory);
     if let Some(ui) = &prefs {
         lightcraft_ui_egui::i18n::set_language(ui.language);
@@ -136,7 +140,7 @@ fn native_main() -> Result<(), String> {
     let launch = lightcraft_ui_egui::panels::library_problem::launch_plan(
         in_memory,
         library_dir,
-        std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into),
+        env_library,
         prefs.as_ref().map(|u| &u.settings),
         lightcraft_engine::library::default_dir(),
     );
@@ -200,6 +204,20 @@ fn native_main() -> Result<(), String> {
                     keep_file: keep_prefs_file,
                     ..Default::default()
                 };
+                // a library opened from its catalog file is the one in use from now on, as Open Library makes it
+                // (after the snapshot above, so the writer saves it)
+                if opened_by_argument
+                    && problem.is_none()
+                    && let Some(dir) = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy().into_owned())
+                {
+                    let settings = &mut app.ui.settings;
+                    if settings.library_path != dir && !settings.library_path.is_empty() {
+                        let previous = settings.library_path.clone();
+                        lightcraft_ui_egui::panels::settings::remember_library(&mut settings.recent_libraries, &previous);
+                    }
+                    lightcraft_ui_egui::panels::settings::remember_library(&mut settings.recent_libraries, &dir);
+                    settings.library_path = dir;
+                }
                 if let Some(notice) = gpu_crash {
                     app.ui.settings.gpu = false;
                     app.notices.push(notice);

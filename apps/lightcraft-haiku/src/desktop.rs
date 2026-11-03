@@ -8,7 +8,8 @@ use lightcraft_ui_egui::panels::library_problem::{Launch, LibraryProblem};
 pub(crate) const HELP: &str = "\
 lightcraft — photo library + raw developer
 
-USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported)
+USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported; a library's catalog.snap or
+                                               folder opens that library)
 
 OPTIONS:
   --library DIR    open (or create) this library (env LIGHTCRAFT_LIBRARY; default: the last library opened, or
@@ -35,17 +36,48 @@ ENVIRONMENT:
 
 /// The launch arguments' files and folders to import (absolute), and a notice for each one that
 /// is not imported (see [`lightcraft_engine::import::launch_path`]; issue #374).
-pub(crate) fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn launch_imports(args: &[String]) -> LaunchArgs {
     let cwd = std::env::current_dir().ok();
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
     launch_imports_in(args, cwd.as_deref(), home.as_deref())
 }
 
-pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> (Vec<String>, Vec<String>) {
-    use lightcraft_engine::import::{LaunchPath, launch_path};
-    let (mut files, mut notices) = (Vec::new(), Vec::new());
+/// The library a launch argument names, after `--library` (`flag`) and `LIGHTCRAFT_LIBRARY` (`env`):
+/// the library to pass on as the flag, and whether the argument chose it (it is then remembered).
+pub(crate) fn launch_library_choice(
+    flag: Option<std::path::PathBuf>,
+    env: Option<&std::path::PathBuf>,
+    argument: Option<std::path::PathBuf>,
+) -> (Option<std::path::PathBuf>, bool) {
+    match (flag, env, argument) {
+        (Some(flag), _, _) => (Some(flag), false),
+        (None, None, Some(argument)) => (Some(argument), true),
+        _ => (None, false),
+    }
+}
+
+/// What the launch arguments ask for: files and folders to import, a library to open (a library's `catalog.snap`
+/// or folder, double-clicked in the file manager), and a notice for each argument
+/// left alone.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LaunchArgs {
+    pub(crate) files: Vec<String>,
+    pub(crate) library: Option<std::path::PathBuf>,
+    pub(crate) notices: Vec<String>,
+}
+
+pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> LaunchArgs {
+    use lightcraft_engine::import::{LaunchPath, launch_deadline, launch_path_until};
+    let (mut files, mut notices, mut library) = (Vec::new(), Vec::new(), None);
+    // one deadline for every argument's library check: they all run before the window opens
+    let deadline = launch_deadline();
     for a in args {
-        match launch_path(a, cwd, home, lightcraft_engine::devices::dcim_in) {
+        match launch_path_until(a, cwd, home, lightcraft_engine::devices::dcim_in, deadline) {
+            Some(LaunchPath::Library(dir)) if library.is_none() => library = Some(std::path::PathBuf::from(dir)),
+            Some(LaunchPath::Library(dir)) => {
+                log::warn!("one library at a time: not opening {dir} given at launch");
+                notices.push(format!("{dir} was not opened: LightCraft opens one library at a time. Open it with File ▸ Open Library…"));
+            }
             Some(LaunchPath::Import(p)) => files.push(p),
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
@@ -55,7 +87,7 @@ pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, 
             None => {}
         }
     }
-    (files, notices)
+    LaunchArgs { files, library, notices }
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
@@ -90,7 +122,7 @@ pub(crate) fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsStrin
 pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = match launch {
         Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_system_clock(), None),
-        Launch::Open { dir, .. } => open_library_session(in_memory, dir.clone(), seed_demo),
+        Launch::Open { dir, remembered, .. } => open_library_session(in_memory, dir.clone(), *remembered, seed_demo),
     };
     s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
@@ -104,7 +136,9 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
 /// If the library can't be opened the session is empty and in memory — never seeded with the
 /// demo photos, never written anywhere — and the problem is returned: the window then says so
 /// and offers Try Again / Choose Another Library… / Continue Without Saving / Quit (issue #100).
-fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
+/// So is a `remembered` library (the one last opened) that isn't there any more: opening would
+/// make a new, empty one in its place, e.g. on an unmounted drive's path (issue #3239).
+fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, remembered: bool, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     if in_memory {
         return (if seed_demo { Session::with_demo() } else { Session::new() }.with_fs().with_default_denoise_models().with_system_clock(), None);
     }
@@ -113,9 +147,14 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
         log::warn!("no library location (set --library or LIGHTCRAFT_LIBRARY)");
         return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the library in. Choose a folder for it.")));
     };
+    if remembered && let Some(why) = lightcraft_ui_egui::panels::library_problem::missing_library_reason(&dir) {
+        log::error!("library {} can't be opened: {why}", dir.display());
+        // Try Again must not make one there either (an empty mount point, issue #3239)
+        return (unopened(), Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(dir.to_string_lossy(), why) }));
+    }
     let t0 = std::time::Instant::now();
     let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
-    match s.open_library(&dir, seed_demo) {
+    match s.open_library(&dir, seed_demo && !remembered) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);
             log::info!(

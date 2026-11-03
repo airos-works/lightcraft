@@ -320,11 +320,21 @@ impl Shell {
             // Tracker's Open, Open With and drops on the icon, the files and folders of a later
             // launch (one copy runs: B_SINGLE_LAUNCH; already absolute) and files dropped on the
             // window: import through the same full library path as the desktop app's launch
-            // arguments. A later launch without any only brings the window to the front.
+            // arguments. A library among them (its catalog.snap or folder) is opened, as File ▸
+            // Open Library would. A later launch without any only brings the window to the front.
             kind::OPEN_FILES | kind::DROPPED_FILES => {
                 let paths = text.lines().filter(|p| !p.is_empty()).map(str::to_owned).collect::<Vec<_>>();
-                let (paths, notices) = crate::desktop::launch_imports(&paths);
+                let crate::desktop::LaunchArgs { files: paths, library, notices } = crate::desktop::launch_imports(&paths);
                 self.app.notices.extend(notices);
+                if let Some(dir) = library {
+                    let open = self.app.session.library.as_ref().is_some_and(|l| l.on_disk && l.dir == dir);
+                    if !open
+                        && let Err(e) =
+                            lightcraft_ui_egui::dialogs::settings::open_library(&mut self.app, &serde_json::json!({ "path": dir.to_string_lossy() }))
+                    {
+                        self.app.notices.push(e);
+                    }
+                }
                 if let Some(problem) = self.app.library_problem.as_mut() {
                     problem.pending_import.extend(paths);
                 } else if !paths.is_empty()

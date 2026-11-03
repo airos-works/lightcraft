@@ -1,7 +1,7 @@
 # LightCraft for air/OS
 
 This is the independently maintained `airos-works/lightcraft` fork of LightCraft
-0.15.0. The upstream project does not maintain this port.
+0.18.0. The upstream project does not maintain this port.
 
 The native application retains the full library, non-destructive developer,
 import/export, presets, masks, history and external-editor workflows. The shared
@@ -189,6 +189,24 @@ button are wired to native file panels and Tracker. The in-app update checker is
 not started; air/OS updates come from the package. The release build uses
 craft-fonts `b076417b5880bd4154bd22f00695b1d28c6bea83`, upstream's release pin.
 Package version `0.15.0~airos1-1` is the first with this merge.
+
+## Upstream 0.18.0 merge (2026-11-04)
+
+The port follows upstream LightCraft 0.18.0 (same egui fork commit and wgpu
+30.0.1, so the vendored wgpu and the host's renderer are unchanged; craft-fonts
+is still `b076417b5880bd4154bd22f00695b1d28c6bea83`). Upstream's Check for
+Updates result dialog (craft-update's `CheckResultDialog`) is native-only: on
+air/OS the command keeps its own message window (see Updates). The host's
+start-up helpers (`desktop.rs`) follow the desktop app's new launch handling: a
+library's `catalog.snap` or folder given at launch opens that library (unless
+`--library` or `LIGHTCRAFT_LIBRARY` names one) and becomes the library in use,
+and a remembered library that has gone (an unmounted volume) is reported
+instead of being recreated empty. A library handed to the running copy (a
+later launch from Terminal, Tracker's Open With) is opened as File ▸ Open
+Library opens one. LightCraft registers no MIME type for `catalog.snap`, so a
+double-click in Tracker doesn't reach it; Open With and Terminal do. The SAM 3
+worker keeps its 4-thread pool on air/OS.
+Package version `0.18.0~airos1-1` is the first with this merge.
 
 ## Updates
 
