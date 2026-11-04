@@ -70,7 +70,7 @@ This independent fork ports [LightCraft by the ArtCraft team](https://github.com
 <!-- airos-ci:latest-builds:start -->
 ## Latest builds
 
-Built automatically by air/OS CI from commit `536632f` on 2026-11-03 ([all files](https://github.com/airos-works/lightcraft/releases/tag/latest)).
+Built automatically by air/OS CI from commit `535bbda` on 2026-11-04 ([all files](https://github.com/airos-works/lightcraft/releases/tag/latest)).
 
 | Architecture | Package |
 |---|---|
