@@ -382,7 +382,7 @@ impl Presenter {
         let Some(size) = self.frame.as_ref().map(|f| f.size) else { return Ok(None) };
         let (bytes_per_row, fits) = {
             let p = link.placement.lock().unwrap_or_else(PoisonError::into_inner);
-            (p.bytes_per_row, p.connected && p.size == size)
+            (p.bytes_per_row, p.connected && fits_window(p.size, size))
         };
         if !fits || !self.acquire_scanout(bytes_per_row) {
             return Ok(None);
@@ -393,12 +393,17 @@ impl Presenter {
             let Some(oldest) = self.in_flight.pop_front() else { break };
             wait_for(&self.device, &self.lost, Some(oldest), Duration::from_secs(5))?;
         }
-        if let Some(commands) = commands.take() {
+        // Nothing to submit when the last frame is shown again. An empty submission is not
+        // made at all: wgpu's waits for the submission before it, and the air/OS RADV before
+        // mesa-amdgpu 1a02b91f reported the device lost for such a wait (it has no sync files).
+        if let Some(commands) = commands.take()
+            && !commands.is_empty()
+        {
             self.queue.submit(commands);
         }
         let (Some(frame), Some(scanout)) = (&self.frame, &self.scanout) else { return Ok(None) };
         let p = link.placement.lock().unwrap_or_else(PoisonError::into_inner);
-        if !p.connected || p.size != frame.size || p.bytes_per_row != scanout.row_pitch {
+        if !p.connected || !fits_window(p.size, frame.size) || p.bytes_per_row != scanout.row_pitch {
             return Ok(None);
         }
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("present: into the screen") });
@@ -711,6 +716,15 @@ impl Drop for Presenter {
     fn drop(&mut self) {
         self.drop_scanout();
     }
+}
+
+/// Whether a frame of `frame` device pixels can be copied into a window app_server says is
+/// `window` device pixels. app_server rounds the window's edges to device pixels and the frame is
+/// its logical size times the scale, rounded, so at a fractional scale (175 %) they may differ by
+/// one pixel for a window that is just as large. The copies are clipped to both; a column or row
+/// of the window the frame does not reach keeps what app_server drew there.
+fn fits_window(window: [u32; 2], frame: [u32; 2]) -> bool {
+    window[0].abs_diff(frame[0]) <= 1 && window[1].abs_diff(frame[1]) <= 1
 }
 
 /// Waits until the GPU has finished `submission` (or everything). wgpu panics rather than answers
