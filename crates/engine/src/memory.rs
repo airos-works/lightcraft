@@ -51,10 +51,30 @@ pub(crate) fn total_ram() -> Option<usize> {
         let out = std::process::Command::new("/sbin/sysctl").args(["-n", "hw.physmem"]).output().ok()?;
         String::from_utf8_lossy(&out.stdout).trim().parse().ok()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+    #[cfg(target_os = "haiku")]
+    {
+        // air/OS (Haiku): the kernel's page count, as `sysinfo -mem` prints it. Asked once: it
+        // doesn't change, and a merge or an export asks for every photo.
+        static RAM: OnceLock<Option<usize>> = OnceLock::new();
+        *RAM.get_or_init(|| {
+            let out = std::process::Command::new("/bin/sysinfo").arg("-mem").output().ok()?;
+            haiku_total_ram(&String::from_utf8_lossy(&out.stdout))
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "haiku")))]
     {
         None
     }
+}
+
+/// The installed RAM in Haiku's `sysinfo -mem` output: the max of its "used/max USED / MAX" line,
+/// e.g. `65052069888 bytes free      (used/max 3532288000 / 68584357888)`.
+#[cfg(any(target_os = "haiku", test))]
+fn haiku_total_ram(out: &str) -> Option<usize> {
+    let rest = out.split("used/max").nth(1)?;
+    let max = rest.split('/').nth(1)?;
+    let digits: String = max.trim_start().chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok().filter(|n| *n > 0)
 }
 
 static BUDGET: AtomicUsize = AtomicUsize::new(0);
@@ -320,5 +340,16 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod haiku_ram_tests {
+    #[test]
+    fn reads_the_max_of_sysinfos_used_max_line() {
+        let out = "65052069888 bytes free      (used/max 3532288000 / 68584357888)\n                           (cached   1300537344)\n";
+        assert_eq!(super::haiku_total_ram(out), Some(68_584_357_888));
+        assert_eq!(super::haiku_total_ram("no memory here"), None);
+        assert_eq!(super::haiku_total_ram("(used/max 1 / 0)"), None);
     }
 }
