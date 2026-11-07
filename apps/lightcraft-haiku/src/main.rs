@@ -153,7 +153,8 @@ fn native_main() -> Result<(), String> {
     let safe_start = force_cpu || (renderer == "auto" && gpu_crash.is_some());
     let gpu_on = !force_cpu && prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
     lightcraft_engine::gpu::set_enabled(gpu_on);
-    let workers = std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 8));
+    let workers = worker_threads(std::env::var("LIGHTCRAFT_THREADS").ok().as_deref(), std::thread::available_parallelism().map_or(4, std::num::NonZero::get));
+    log::info!(target: "lightcraft_haiku", "{workers} worker threads");
     if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(workers).build_global() {
         log::warn!("Worker pool: {e}");
     }
@@ -256,4 +257,32 @@ fn native_main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     host::run();
     worker.join().map_err(|_| "Interface thread stopped unexpectedly".to_string())?
+}
+
+/// The worker pool's size: `LIGHTCRAFT_THREADS` when it is a number from 1 to 256, else the
+/// processors, at most [`MAX_WORKERS`].
+fn worker_threads(env: Option<&str>, cpus: usize) -> usize {
+    match env.and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(n @ 1..=256) => n,
+        _ => cpus.clamp(1, MAX_WORKERS),
+    }
+}
+
+/// See docs/haiku.md (Performance on air/OS): on the X399 (16 cores) 4, 6 and 8 workers develop
+/// and brush alike, 8 export fastest, and 16 are slower at everything.
+const MAX_WORKERS: usize = 8;
+
+#[cfg(test)]
+mod worker_tests {
+    #[test]
+    fn worker_threads_take_the_variable_or_the_capped_processor_count() {
+        use super::{MAX_WORKERS, worker_threads};
+        assert_eq!(worker_threads(None, 64), MAX_WORKERS);
+        assert_eq!(worker_threads(None, 2), 2);
+        assert_eq!(worker_threads(None, 0), 1);
+        assert_eq!(worker_threads(Some("16"), 32), 16);
+        assert_eq!(worker_threads(Some(" 3 "), 32), 3);
+        assert_eq!(worker_threads(Some("0"), 32), MAX_WORKERS);
+        assert_eq!(worker_threads(Some("lots"), 4), 4);
+    }
 }
