@@ -6,12 +6,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::present::{self, Presenter, Shown};
+use crate::texture_fit::TextureFit;
+
+const LOG: &str = "lightcraft_haiku";
 
 pub struct Gpu {
     pub state: RenderState,
     pub health: Health,
     presenter: Presenter,
     completed: Option<crate::frame_cache::Frame>,
+    /// egui textures larger than the device takes, uploaded smaller.
+    fit: TextureFit,
 }
 #[derive(Clone, Default)]
 pub struct Health(Arc<Mutex<Option<String>>>);
@@ -51,13 +56,10 @@ impl Gpu {
         let mut setup = WgpuSetup::without_display_handle();
         let WgpuSetup::CreateNew(ref mut create) = setup else { return Err("Expected a new GPU device".into()) };
         create.instance_descriptor.backends = wgpu::Backends::VULKAN;
-        create.native_adapter_selector = Some(std::sync::Arc::new(|adapters, _surface| {
-            adapters
-                .iter()
-                .find(|a| matches!(a.get_info().device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu))
-                .cloned()
-                .ok_or_else(|| "No hardware Vulkan adapter; using software rendering".to_string())
-        }));
+        create.native_adapter_selector = Some(Arc::new(|adapters, _surface| choose_adapter(adapters)));
+        // Only egui and the presenter draw on this device (the photo pipeline has its own).
+        create.device_descriptor =
+            Arc::new(|adapter| wgpu::DeviceDescriptor { label: Some("LightCraft window"), required_limits: device_limits(adapter), ..Default::default() });
         create.instance_descriptor.backend_options = lightcraft_engine::gpu::backend::backend_options();
         create.instance_descriptor.flags = lightcraft_engine::gpu::backend::instance_flags_from_env(create.instance_descriptor.flags);
         let instance = pollster::block_on(setup.new_instance());
@@ -67,7 +69,8 @@ impl Gpu {
         // B_RGB32 bitmap, as they are.
         state.target_format = present::FORMAT;
         state.renderer = Arc::new(egui::mutex::RwLock::new(Renderer::new(&state.device, present::FORMAT, RendererOptions::default())));
-        log::info!(target: "lightcraft_haiku", "air/OS GPU: {:?}", state.adapter.get_info());
+        log::info!(target: LOG, "air/OS GPU: {:?}", state.adapter.get_info());
+        log::info!(target: LOG, "GPU device: {}", describe(&state.device));
         let health = Health::default();
         let lost = health.clone();
         state.device.set_device_lost_callback(move |reason, message| {
@@ -77,7 +80,7 @@ impl Gpu {
         state.device.on_uncaptured_error(Arc::new(move |e| errors.mark(format!("Window GPU error: {e}"))));
         let presenter = Presenter::new(&state.device, &state.queue, present::Mode::from_env("LIGHTCRAFT_PRESENT"), native);
         log::info!(target: "lightcraft_haiku", "air/OS present: {}", presenter.mode().name());
-        Ok(Self { state, health, presenter, completed: None })
+        Ok(Self { state, health, presenter, completed: None, fit: TextureFit::default() })
     }
     pub fn max_texture_side(&self) -> usize {
         self.state.device.limits().max_texture_dimension_2d as usize
@@ -107,9 +110,12 @@ impl Gpu {
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("LightCraft native frame") });
         let mut renderer = state.renderer.write();
+        let max = state.device.limits().max_texture_dimension_2d as usize;
         for (id, images) in &delta.set {
             for image in images {
-                renderer.update_texture(&state.device, &state.queue, *id, image);
+                if let Some(image) = self.fit.fit(*id, image, max) {
+                    renderer.update_texture(&state.device, &state.queue, *id, &image);
+                }
             }
         }
         let mut commands = renderer.update_buffers(&state.device, &state.queue, &mut encoder, &primitives, &screen);
@@ -142,6 +148,7 @@ impl Gpu {
         let mut renderer = self.state.renderer.write();
         for id in &delta.free {
             renderer.free_texture(id);
+            self.fit.free(*id);
         }
         drop(renderer);
         log::debug!(target: "lightcraft_haiku",
@@ -165,13 +172,17 @@ impl Gpu {
         }
         let state = &self.state;
         let mut renderer = state.renderer.write();
+        let max = state.device.limits().max_texture_dimension_2d as usize;
         for (id, images) in &delta.set {
             for image in images {
-                renderer.update_texture(&state.device, &state.queue, *id, image);
+                if let Some(image) = self.fit.fit(*id, image, max) {
+                    renderer.update_texture(&state.device, &state.queue, *id, &image);
+                }
             }
         }
         for id in &delta.free {
             renderer.free_texture(id);
+            self.fit.free(*id);
         }
         drop(renderer);
         self.completed = None;
@@ -199,6 +210,111 @@ impl Drop for Gpu {
         // The window keeps what it reports its direct connection to, and with it the device.
         self.presenter.detach(&Native);
     }
+}
+
+/// `LIGHTCRAFT_GPU_LIMITS=small`: create the window's device as on a small GPU (wgpu's downlevel limits: 4
+/// storage buffers per stage, 16 KiB uniform bindings, 4 colour attachments; with V3DV's 4096 px
+/// textures), to check on a big one that the app still runs, or falls back per operation, without
+/// losing the device. The photo pipeline's own devices (`lightcraft-gpu`) read the variable's
+/// other values (a storage binding size, `downlevel`), not this one, and check what they need
+/// of the adapter themselves.
+const LIMITS_VAR: &str = "LIGHTCRAFT_GPU_LIMITS";
+/// The smallest texture side worth drawing a window into.
+const MIN_TEXTURE_SIDE: u32 = 2048;
+/// The largest texture side asked for: room for any window, and EffectCraft's cap.
+const MAX_TEXTURE_SIDE: u32 = 16384;
+
+/// Whether [`LIMITS_VAR`] asks for a small GPU's limits.
+fn small_gpu() -> bool {
+    std::env::var(LIMITS_VAR).is_ok_and(|v| v.trim().eq_ignore_ascii_case("small"))
+}
+
+/// `limits`, lowered to a small GPU's when [`LIMITS_VAR`] asks for it.
+fn as_small_gpu(limits: wgpu::Limits) -> wgpu::Limits {
+    if !small_gpu() {
+        return limits;
+    }
+    limits.or_worse_values_from(&wgpu::Limits { max_texture_dimension_1d: 4096, max_texture_dimension_2d: 4096, ..wgpu::Limits::downlevel_defaults() })
+}
+
+/// The limits the device is created with on `adapter`: its own, which it always grants, with
+/// textures capped at [`MAX_TEXTURE_SIDE`]. egui-wgpu's default asks for WebGPU's (8192 px
+/// textures, 8 colour attachments), which the arm64 boards' GPUs refuse (V3DV: 4096 px textures,
+/// 4 attachments), sending them to the rasteriser; NVIDIA's and AMD's get the same or more.
+fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let have = as_small_gpu(adapter.limits());
+    wgpu::Limits { max_texture_dimension_2d: have.max_texture_dimension_2d.min(MAX_TEXTURE_SIDE), ..have }
+}
+
+/// Why `adapter` can't draw the windows, or `None` when it can.
+fn unusable(adapter: &wgpu::Adapter) -> Option<String> {
+    let info = adapter.get_info();
+    if !matches!(info.device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu) {
+        // Software Vulkan (lavapipe) draws slower than the rasteriser does.
+        return Some(format!("not a hardware GPU ({:?})", info.device_type));
+    }
+    use wgpu::TextureUsages as U;
+    let needed = U::RENDER_ATTACHMENT | U::COPY_SRC | U::COPY_DST | U::TEXTURE_BINDING;
+    let usages = adapter.get_texture_format_features(present::FORMAT).allowed_usages;
+    if !usages.contains(needed) {
+        return Some(format!("{:?} textures lack {:?}", present::FORMAT, needed.difference(usages)));
+    }
+    if !adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
+        return Some("no compute shaders (the presenter compares frames with one)".into());
+    }
+    let l = as_small_gpu(adapter.limits());
+    if l.max_texture_dimension_2d < MIN_TEXTURE_SIDE {
+        return Some(format!("textures up to {} px only", l.max_texture_dimension_2d));
+    }
+    // The presenter's comparison runs 16 × 16 workgroups writing one storage buffer.
+    if l.max_compute_invocations_per_workgroup < 256
+        || l.max_compute_workgroup_size_x < 16
+        || l.max_compute_workgroup_size_y < 16
+        || l.max_storage_buffers_per_shader_stage < 1
+    {
+        return Some(format!(
+            "compute too small for the presenter ({} invocations per workgroup, {} storage buffers per stage)",
+            l.max_compute_invocations_per_workgroup, l.max_storage_buffers_per_shader_stage
+        ));
+    }
+    None
+}
+
+/// The hardware adapter to draw with, a discrete GPU before an integrated one; every adapter
+/// left out is logged with the reason.
+fn choose_adapter(adapters: &[wgpu::Adapter]) -> Result<wgpu::Adapter, String> {
+    let mut best: Option<&wgpu::Adapter> = None;
+    for adapter in adapters {
+        let info = adapter.get_info();
+        if let Some(why) = unusable(adapter) {
+            log::info!(target: LOG, "GPU adapter {} ({}, {}) not used: {why}", info.name, info.driver, info.driver_info);
+            continue;
+        }
+        let rank = |a: &wgpu::Adapter| u8::from(a.get_info().device_type == wgpu::DeviceType::DiscreteGpu);
+        if best.is_none_or(|b| rank(adapter) > rank(b)) {
+            best = Some(adapter);
+        }
+    }
+    best.cloned().ok_or_else(|| "No usable hardware Vulkan adapter; using software rendering".to_string())
+}
+
+/// What the device got, for the log.
+fn describe(device: &wgpu::Device) -> String {
+    let l = device.limits();
+    format!(
+        "textures {} px, buffers {} MiB, storage bindings {} MiB, {} storage buffers and {} storage textures per stage, \
+         uniform bindings {} KiB, {} colour attachments, {} invocations per workgroup, features {:?}{}",
+        l.max_texture_dimension_2d,
+        l.max_buffer_size >> 20,
+        l.max_storage_buffer_binding_size >> 20,
+        l.max_storage_buffers_per_shader_stage,
+        l.max_storage_textures_per_shader_stage,
+        l.max_uniform_buffer_binding_size >> 10,
+        l.max_color_attachments,
+        l.max_compute_invocations_per_workgroup,
+        device.features(),
+        if small_gpu() { format!(" ({LIMITS_VAR}=small)") } else { String::new() }
+    )
 }
 
 #[cfg(test)]

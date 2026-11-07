@@ -71,6 +71,26 @@ Both devices reject software Vulkan adapters. The native
 window falls back to its CPU renderer if hardware initialization or rendering
 fails; photo processing has the shared engine's separate CPU fallback.
 
+Small GPUs (since `0.18.0~airos1-4`): the window's device asks for the adapter's own limits, with
+textures capped at 16384 px, instead of egui-wgpu's default (WebGPU's limits: 8192 px textures,
+8 colour attachments), which the arm64 boards' GPUs refuse (V3DV on the Raspberry Pi 4: 4096 px
+textures, 4 attachments), sending the window to the CPU renderer. On the X399's NVK it now gets
+16384 px textures (8192 before) and otherwise the adapter's limits. The adapter is the first
+discrete GPU, else the first integrated one, that can draw the window (BGRA render targets,
+compute for the presenter's frame comparison, textures of 2048 px or more); every adapter passed
+over is logged with the reason (`GPU adapter … not used: …`), and the limits the device got are
+logged (`GPU device: textures … px, …`). An egui texture larger than the device takes is uploaded
+at a fraction of its size (logged) rather than raising a wgpu error that would lose the device.
+The photo pipeline's own devices already asked for the adapter's limits and check what their
+kernels need (10 storage buffers per stage for the develop kernels; fewer for the AI masks,
+Denoise and faces), going to the CPU pipeline when the adapter has less.
+`LIGHTCRAFT_GPU_LIMITS=small` creates the window's device with a small GPU's limits (wgpu's
+downlevel ones with 4096 px textures) to check this on a big GPU; the variable's other values
+(`downlevel`, a size in MiB) still lower only the photo pipeline's buffer sizes. Checked on the
+X399 (7 November 2026, over the control channel: import a RAW, open it, develop changes, brush
+strokes, full-size export): normal and `small` both draw with "Vulkan changed-tile readback", no GPU error;
+develop median 316 ms / 325 ms, brush stroke 325 / 366 ms, export 3.7 / 4.1 s.
+
 `LIGHTCRAFT_RENDERER=auto` is the default. `cpu` selects CPU rendering and photo
 processing; `vulkan` requires hardware at startup and reports an error if unavailable;
 a later window-device fault still falls back safely.
