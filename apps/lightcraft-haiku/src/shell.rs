@@ -45,6 +45,9 @@ pub struct Shell {
     quit: bool,
     /// When egui wants the next frame (from this thread's frames).
     repaint_at: Option<Instant>,
+    /// When the last frame started, and the shortest time between two ([`frame_interval`]).
+    last_frame: Instant,
+    min_interval: Duration,
     /// When other threads asked for one (`request_repaint` from a worker).
     woken_for: Arc<Mutex<Option<Instant>>>,
     screenshots: Vec<egui::ScreenshotCallback>,
@@ -96,6 +99,20 @@ fn button(bit: i32) -> Option<PointerButton> {
         16 => PointerButton::Extra2,
         _ => return None,
     })
+}
+
+/// The shortest time between two frames: one refresh of the main screen (its mode's rate, 60 Hz
+/// when it doesn't say). `LIGHTCRAFT_MAX_FPS` sets another rate, 0 none. A window's bitmap has no
+/// vertical sync here, so whatever asks for the next frame as soon as the last one is out (a
+/// slideshow fade, a pending render's 16 ms polls, a drag) was drawn as often as the processor
+/// allowed.
+fn frame_interval(env: Option<&str>, refresh_hz: f32) -> Duration {
+    let fps = match env.and_then(|v| v.trim().parse::<f64>().ok()).filter(|f| f.is_finite() && *f >= 0.0) {
+        Some(f) => f,
+        None if (24.0..=500.0).contains(&refresh_hz) => f64::from(refresh_hz),
+        None => 60.0,
+    };
+    if fps < 1.0 { Duration::ZERO } else { Duration::from_secs_f64(1.0 / fps.min(1000.0)) }
 }
 
 impl Shell {
@@ -169,6 +186,13 @@ impl Shell {
             close_requested: false,
             quit: false,
             repaint_at: Some(Instant::now()),
+            last_frame: Instant::now(),
+            min_interval: {
+                let hz = host::refresh_rate();
+                let interval = frame_interval(std::env::var("LIGHTCRAFT_MAX_FPS").ok().as_deref(), hz);
+                log::info!(target: "lightcraft_haiku", "frames at most every {:.2} ms (screen {hz:.1} Hz)", interval.as_secs_f64() * 1e3);
+                interval
+            },
             woken_for,
             screenshots: Vec::new(),
             title: String::new(),
@@ -182,7 +206,14 @@ impl Shell {
             let happened = self.drain();
             let due = self.take_due();
             if happened || due {
-                self.frame();
+                // At most one frame per refresh: input waits in `events` for the next one.
+                let next = self.last_frame + self.min_interval;
+                if Instant::now() < next {
+                    self.repaint_at = Some(next);
+                } else {
+                    self.last_frame = Instant::now();
+                    self.frame();
+                }
             }
             self.present_chores();
         }
@@ -545,7 +576,17 @@ impl Shell {
         let ppp = out.pixels_per_point;
         self.raster.set_textures(&out.textures_delta);
         let minimized = host::window_info().minimized;
-        if (!minimized || self.gpu.is_some() || !self.screenshots.is_empty()) && !self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some()) {
+        let faulted = self.gpu_health.as_ref().is_some_and(|h| h.fault().is_some());
+        // A minimized window isn't drawn, on the GPU either (no frame, no readback); its frames
+        // still bring the textures up to date.
+        let draw = (!minimized || !self.screenshots.is_empty()) && !faulted;
+        if !draw
+            && !faulted
+            && let Some(gpu) = &mut self.gpu
+        {
+            gpu.textures_only(&out.textures_delta);
+        }
+        if draw {
             let t1 = Instant::now();
             let prims = ctx.tessellate(out.shapes, ppp);
             let t2 = Instant::now();
@@ -697,5 +738,22 @@ fn copy_image(img: &egui::ColorImage) {
             }
         }
         Err(e) => log::warn!(target: "lightcraft_haiku", "clipboard picture: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::frame_interval;
+    use std::time::Duration;
+
+    #[test]
+    fn frames_follow_the_screen_or_the_variable() {
+        let ms = |d: Duration| (d.as_secs_f64() * 1e3 * 100.0).round() / 100.0;
+        assert_eq!(ms(frame_interval(None, 60.0)), 16.67);
+        assert_eq!(ms(frame_interval(None, 144.0)), 6.94);
+        assert_eq!(ms(frame_interval(None, 0.0)), 16.67, "a mode without timing is taken as 60 Hz");
+        assert_eq!(ms(frame_interval(Some("30"), 144.0)), 33.33);
+        assert_eq!(frame_interval(Some("0"), 60.0), Duration::ZERO);
+        assert_eq!(ms(frame_interval(Some("fast"), 120.0)), 8.33);
     }
 }

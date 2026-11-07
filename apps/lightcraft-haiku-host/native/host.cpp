@@ -1492,6 +1492,22 @@ DisplayField(const char* text)
 }
 
 
+// The main screen's refresh rate in Hz (pixel clock over the frame's total pixels), or 0 when
+// the mode doesn't say: the interface paces its frames to it.
+float
+lc_host_refresh_rate()
+{
+	BScreen screen(B_MAIN_SCREEN_ID);
+	display_mode mode;
+	if (!screen.IsValid() || screen.GetMode(&mode) != B_OK)
+		return 0;
+	double total = (double)mode.timing.h_total * mode.timing.v_total;
+	if (total <= 0 || mode.timing.pixel_clock == 0)
+		return 0;
+	return (float)(mode.timing.pixel_clock * 1000.0 / total);
+}
+
+
 // The displays, one per line, tab-separated: id, frame (left, top, right,
 // bottom, as window frames are measured), primary (0/1), connector, monitor
 // name, vendor, serial number (malloc'd). air/OS: every enabled display of

@@ -157,6 +157,25 @@ impl Gpu {
         self.completed = Some(crate::frame_cache::Frame { primitives, size, ppp, clear });
         Ok(Some(shown))
     }
+    /// A frame that isn't drawn (the window is minimized): only its texture uploads and frees,
+    /// which later frames depend on. The next frame is then drawn in full.
+    pub fn textures_only(&mut self, delta: &egui::TexturesDelta) {
+        if delta.set.is_empty() && delta.free.is_empty() {
+            return;
+        }
+        let state = &self.state;
+        let mut renderer = state.renderer.write();
+        for (id, images) in &delta.set {
+            for image in images {
+                renderer.update_texture(&state.device, &state.queue, *id, image);
+            }
+        }
+        for id in &delta.free {
+            renderer.free_texture(id);
+        }
+        drop(renderer);
+        self.completed = None;
+    }
     /// The last frame again, where the window's place on the screen changed.
     pub fn present_again(&mut self, scale: f32, native: &dyn present::Native) -> Result<Shown, String> {
         self.presenter.present(Vec::new(), native, scale)
