@@ -1,13 +1,3 @@
-<p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
-
-
 <h1 align="center">LightCraft</h1>
 
 <h3 align="center">Your photos. Your pixels. Your machine.</h3>
@@ -640,17 +630,14 @@ Inter（SIL OFL 1.1）。使用 [craft-fonts](https://github.com/storytold/craft
 還會內嵌其中文與日文字型（Noto Sans CJK SC、BIZ UDPGothic、BIZ UDMincho、Shippori Mincho；SIL OFL 1.1），列於其
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md) 中。所有圖示皆為原創。
 
-[`docs/brand/`](docs/brand/) 中的 ArtCraft 名稱、字標與標誌是
-ArtCraft 團隊的商標，不在本授權範圍內。它們只能以未經修改的形式，作為
-本儲存庫與 LightCraft 的一部分，依 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 使用。
-分支與修改版本必須移除它們。
+ArtCraft 名稱、字標與標誌是 ArtCraft 團隊的商標，不在本授權範圍內。本分支是修改版本，因此依
+[`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 的要求，已從中移除這些標誌
+（[`docs/brand/README.md`](docs/brand/README.md)）。
 
 <sub>Adobe、Photoshop、Illustrator、Premiere Pro、Lightroom、Acrobat、After Effects 與 InDesign 是 Adobe Inc. 在美國及／或其他國家的商標或註冊商標。LightCraft 是一個獨立的開源專案，與 Adobe Inc. 沒有任何關係，也未獲其贊助或認可；這些名稱僅用於說明它所相容的工作流程。</sub>
 
-<p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>由 <a href="https://getartcraft.com/">ArtCraft</a> 團隊與社群製作。</sub>
-</p>
+LightCraft for air/OS 基於 [ArtCraft](https://getartcraft.com/) 團隊的
+[LightCraft](https://github.com/storytold/lightcraft)，不是 ArtCraft 產品。
 
 ## Star history
 

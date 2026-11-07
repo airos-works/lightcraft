@@ -264,6 +264,14 @@ check. The start-up check stays off. The community links (Help ▸ Join the
 ArtCraft Discord, the About dialog's button) stay: they open the web browser,
 and upstream has no switch a host could set.
 
+## No ArtCraft marks
+
+This fork carries no ArtCraft marks, as `docs/brand/LICENSE-brand.txt` requires
+of a published modified version (`docs/brand/README.md`); the app never painted
+them. Since `0.18.0~airos1-3` the About dialog also says, on air/OS, that the
+port is based on LightCraft by the ArtCraft team and is not an ArtCraft product,
+and the READMEs and NOTICE no longer show or describe the marks as part of it.
+
 ## Touchpad scrolling
 
 air/OS's mouse add-on marks a touchpad's scroll gesture (since 2026-10-27,

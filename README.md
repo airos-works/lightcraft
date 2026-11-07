@@ -713,14 +713,12 @@ Inter (SIL OFL 1.1). Builds made with [craft-fonts](https://github.com/storytold
 also embed its Chinese and Japanese fonts (Noto Sans CJK SC, BIZ UDPGothic, BIZ UDMincho, Shippori Mincho; SIL OFL 1.1), listed in its
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md). All icons are original.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and LightCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team and are not covered by
+this license. This fork is a modified version, so as [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)
+requires, the marks have been removed from it ([`docs/brand/README.md`](docs/brand/README.md)).
 
-<p align="center">
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
-</p>
+LightCraft for air/OS is based on [LightCraft](https://github.com/storytold/lightcraft) by the
+[ArtCraft](https://getartcraft.com/) team. It is not an ArtCraft product.
 
 ## Star history
 

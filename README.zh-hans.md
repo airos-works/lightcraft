@@ -597,14 +597,12 @@ Inter（SIL OFL 1.1）。用 [craft-fonts](https://github.com/storytold/craft-fo
 还会内嵌它的中文和日文字体（Noto Sans CJK SC、BIZ UDPGothic、BIZ UDMincho、Shippori Mincho；SIL OFL 1.1），列在其
 [ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md) 中。所有图标均为原创。
 
-[`docs/brand/`](docs/brand/) 中的 ArtCraft 名称、字标和标志是
-ArtCraft 团队的商标，不在本许可范围内。它们只能在未修改的情况下，作为
-本仓库和 LightCraft 的一部分，按 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 使用。
-分支和修改版本必须移除它们。
+ArtCraft 名称、字标和标志是 ArtCraft 团队的商标，不在本许可范围内。本分支是修改版本，因此按
+[`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 的要求，已从中移除这些标志
+（[`docs/brand/README.md`](docs/brand/README.md)）。
 
-<p align="center">
-  <sub>由 <a href="https://getartcraft.com/">ArtCraft</a> 团队和社区制作。</sub>
-</p>
+LightCraft for air/OS 基于 [ArtCraft](https://getartcraft.com/) 团队的
+[LightCraft](https://github.com/storytold/lightcraft)，不是 ArtCraft 产品。
 
 ## Star history
 

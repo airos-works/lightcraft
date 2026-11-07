@@ -1904,6 +1904,10 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
                 crate::theme::font_credits(app.chinese_font.is_some())
             ));
+            // air/OS builds are a modified version: LICENSE-brand.txt lets them say, in plain
+            // text, what they are based on, but not present themselves as an ArtCraft product.
+            #[cfg(target_os = "haiku")]
+            ui.label("LightCraft for air/OS is based on LightCraft by the ArtCraft team; it is not an ArtCraft product.");
             ui.add_space(10.0);
             let r = crate::button::Button::new("Join the ArtCraft Discord")
                 .primary()
