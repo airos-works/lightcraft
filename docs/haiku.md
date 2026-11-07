@@ -98,6 +98,52 @@ driver for LightCraft only, including launches from Tracker and Deskbar. Set
 Existing `VK_DRIVER_FILES` or `VK_ICD_FILENAMES` overrides take precedence. The
 package neither bundles a driver nor changes system Vulkan configuration.
 
+## Performance on air/OS (2026-11-07)
+
+What runs on the GPU is upstream's choice, and on air/OS it all does: the develop pipeline for
+the loupe, zoomed regions, masks and brushes and exports (`crates/gpu`, its own Vulkan device
+with the adapter's full limits), AI Denoise (`nn.rs`) and the AI masks (`sam-gpu`, see below),
+each on a device of its own as upstream makes them; the window draws on another. Thumbnails,
+Remove (PatchMatch inpainting), panoramas and HDR merges, the slideshow's composer and its AV1
+export (rav1e) are processor work on every platform. Nothing is switched off for air/OS
+(`LIGHTCRAFT_GPU_BACKEND`, the GPU preference and `LIGHTCRAFT_RENDERER=cpu` work as before).
+
+Changes:
+
+- **Memory.** The engine read the installed RAM only on Linux, macOS and FreeBSD; on air/OS it
+  now asks `sysinfo -mem` once (`crates/engine/src/memory.rs`). That sizes the memory budget
+  (a quarter of RAM, at most 1.5 GiB: a 4 GB board gets 1 GiB instead of 1.5), how large a
+  panorama may be (assumed 8 GB before: on the X399's 64 GB it may now be about eight times the
+  pixels) and the export check that refuses a size the computer can't hold.
+- **Frames are paced to the screen.** A window's bitmap has no vertical sync here, so anything
+  that asked for the next frame as soon as the last was out (a slideshow fade, a pending render's
+  16 ms polls, a drag) was drawn as often as the processor allowed. The interface now draws at
+  most once per refresh of the main screen (its mode's rate, 60 Hz when the mode doesn't say);
+  input that arrives in between waits for that frame. `LIGHTCRAFT_MAX_FPS=N` sets another rate,
+  0 none.
+- **A minimized window isn't drawn.** The GPU path used to draw and read back every frame of a
+  minimized window; now only its texture uploads are applied, and the window is drawn in full
+  when it comes back.
+- **Worker threads.** The rayon pool keeps at most 8 threads (`LIGHTCRAFT_THREADS=N` overrides
+  it). On the X399 (16 cores, 32 threads), 4, 6 and 8 workers develop and brush alike, 8 export
+  fastest (3.9 s, against 4.2 s with 6 and 4.5 s with 4), and 16 are slower at everything.
+- **Direct presentation.** Showing the last frame again submits nothing (an empty submission
+  still waits on wgpu's semaphore, and the air/OS RADV before mesa-amdgpu `1a02b91f` lost the
+  device on that wait), and a frame within one device pixel of the window's size is copied (at
+  175 % the window's and the frame's rounding can differ by one pixel).
+
+Measured on the X399 (GTX 1070, NVK) with `tools/haiku/bench.py` (an in-memory library, a 24 MP
+Sony ARW, a 1400 × 900 window; the screen ran at 1024 × 768 on the firmware frame buffer that
+day, which keeps the loupe's preview small): import 0.3 s, the first develop in Detail 2.0–2.3 s,
+a develop change (exposure, highlights, clarity…) until the loupe shows it 0.35 s, a brush
+stroke into a mask with an exposure adjustment 0.35 s, a full-size JPEG export 3.9 s. With
+`LIGHTCRAFT_GPU_BACKEND=off` the export takes 10.5 s and a brush stroke 0.95 s. A develop change
+is not much faster on the GPU than on the processor (0.62 s against 0.70 s with a larger
+preview): the GPU stages of such a render take about 100 ms (`LIGHTCRAFT_PROFILE=1`; most of
+it the banded final pass and its readback), and the rest of the render job's 0.35–0.5 s is
+outside the pipeline's profiled stages and still to be found. (Haiku's sampling `profile` hung the X399 when it was
+attached to LightCraft on NVK; don't use it on a Vulkan app there.)
+
 ## Validation
 
 Native validation used a Radeon 760M laptop (RADV, Mesa 25.3.6,
